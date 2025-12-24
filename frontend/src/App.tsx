@@ -1,24 +1,19 @@
-import React from 'react';
-import logo from './logo.svg';
-import './App.css';
+import TrackWithCar from "./TrackWithCar";
 
 function App() {
   return (
-    <div className="App">
-      <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.tsx</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
-      </header>
+    <div
+      style={{
+        padding: 20,
+        backgroundColor: "#000",
+        minHeight: "100vh",
+      }}
+    >
+      <h2 style={{ color: "white", marginBottom: 10 }}>
+        Monza – Single Car Replay (Phase 2)
+      </h2>
+
+      <TrackWithCar />
     </div>
   );
 }

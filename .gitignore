@@ -30,3 +30,7 @@ Thumbs.db
 
 # ===== Notebooks =====
 .ipynb_checkpoints/
+
+
+cache/
+*.csv
