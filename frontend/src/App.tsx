@@ -1,19 +1,19 @@
-import TrackWithCar from "./TrackWithCar";
+import ReplayController from "./replay/ReplayController";
 
 function App() {
   return (
     <div
       style={{
-        padding: 20,
-        backgroundColor: "#000",
+        background: "#000",
         minHeight: "100vh",
+        padding: 20,
       }}
     >
-      <h2 style={{ color: "white", marginBottom: 10 }}>
-        Monza – Single Car Replay (Phase 2)
+      <h2 style={{ color: "white", marginBottom: 12 }}>
+        Monza 2023 – Race Replay (Phase 4)
       </h2>
 
-      <TrackWithCar />
+      <ReplayController />
     </div>
   );
 }
