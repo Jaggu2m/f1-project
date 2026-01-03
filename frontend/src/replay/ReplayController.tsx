@@ -18,7 +18,7 @@ export default function ReplayController() {
      LOAD RACE DURATION (ONCE)
   ========================== */
   useEffect(() => {
-    fetch("/race_positions_monaco_2023_lapaware.json")
+    fetch("/race_positions_silverstone_2023_lapaware.json")
       .then(res => res.json())
       .then((data: RaceData) => {
         let maxT = 0;

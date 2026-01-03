@@ -6,7 +6,7 @@ import pandas as pd
 fastf1.Cache.enable_cache("cache")
 
 SEASON = 2023
-RACE_NAME = "Monaco"
+RACE_NAME = "Suzuka"
 SESSION = "R"
 
 session = fastf1.get_session(SEASON, RACE_NAME, SESSION)
@@ -120,8 +120,8 @@ for driver in drivers:
 
     print(f"{driver_code}: {len(positions)} samples, {positions[-1]['lap']+1} laps")
 
-with open("race_positions_monaco_2023_lapaware.json", "w") as f:
+with open("race_positions_suzuka_2023_lapaware.json", "w") as f:
     json.dump(race_data, f)
 
-print(f"✅ Phase-5 lap-aware race data saved → race_positions_monaco_2023_lapaware.json")
+print(f"✅ Phase-5 lap-aware race data saved → race_positions_suzuka_2023_lapaware.json")
 print(f"🏁 Race duration: {round(max_t, 1)} seconds")
