@@ -107,12 +107,20 @@ for driver in drivers:
     # =========================
     # LAP DATA & SECTORS
     # =========================
+    # =========================
+    # LAP DATA & SECTORS
+    # =========================
     # We want to store sector times for every completed lap
     driver_best_s1 = float("inf")
     driver_best_s2 = float("inf")
     driver_best_s3 = float("inf")
 
+    # State for Continuous Distance Calculation
+    prev_total_s = None
+    prev_projected_s = None
+
     for _, lap in laps.iterrows():
+        # ... (Lap time extraction - kept same)
         lap_no = int(lap["LapNumber"]) # 1-based
         
         # Extract sector times (Timedelta -> seconds)
@@ -142,68 +150,64 @@ for driver in drivers:
             "s2": s2,
             "s3": s3
         })
-
-    # =========================
-    # PIT STOP DETECTION (DEBOUNCED)
-    # =========================
-    last_pit_in = None
-
-    for _, lap in laps.iterrows():
-        pit_in = lap["PitInTime"]
-        pit_out = lap["PitOutTime"]
-
-        if pd.notna(pit_in):
-            pit_in_sec = (pit_in - race_start_time).total_seconds()
-
-            # Prevent duplicate pit entries
-            if last_pit_in is None or pit_in_sec - last_pit_in > 30:
-                pit_stops.append({
-                    "lap": int(lap["LapNumber"]) - 1,
-                    "enter": pit_in_sec,
-                    "exit": (
-                        (pit_out - race_start_time).total_seconds()
-                        if pd.notna(pit_out)
-                        else pit_in_sec + 22
-                    )
-                })
-                last_pit_in = pit_in_sec
-
-    # =========================
-    # POSITION SAMPLING
-    # =========================
-    for _, lap in laps.iterrows():
-        if pd.isna(lap["LapStartTime"]):
-            continue
-            
-        # ... (rest of sampling logic is fine, just ensure it uses correct lap_no)
-        lap_no_0 = int(lap["LapNumber"]) - 1
+        
+        # Position Data for this Lap
         lap_start = lap["LapStartTime"]
+        if pd.isna(lap_start): continue
 
         pos = lap.get_pos_data()
-        if pos is None or pos.empty:
-            continue
-
+        if pos is None or pos.empty: continue
         pos = pos[["Time", "X", "Y"]].dropna()
 
         for _, row in pos.iterrows():
             absolute_time = lap_start + row["Time"]
             t = (absolute_time - race_start_time).total_seconds()
 
-            # Continuous race distance
-            race_s = lap_no_0 * TRACK_LENGTH + project_to_track(row["X"], row["Y"])
+            projected_s = project_to_track(row["X"], row["Y"])
+
+            if prev_total_s is None:
+                # First point initialization
+                # Use lap_number to guess initial offset if not lap 1? 
+                # Ideally start at 0 if race start, or lap_no*TRACK if mid-race join?
+                # For safety, let's assume valid start or use projected_s + (lap_no-1)*TRACK
+                # BUT user said "Completely ignores lap numbers".
+                # If we start at Lap 1, projected_s is correct.
+                total_s = projected_s
+            else:
+                delta = projected_s - prev_projected_s
+
+                # Lap wrap detection (Forward or Backward)
+                if delta < -TRACK_LENGTH * 0.5:
+                    delta += TRACK_LENGTH
+                elif delta > TRACK_LENGTH * 0.5:
+                    delta -= TRACK_LENGTH
+
+                total_s = prev_total_s + delta
+
+                # 🔥 Enforce Monotonic Increase (Prevent GPS jitter backward)
+                if total_s < prev_total_s:
+                    total_s = prev_total_s
 
             positions.append({
                 "t": float(t),
-                "s": float(race_s),
-                "lap": lap_no_0
+                "s": float(total_s),
+                "lap": 0  # Not used for distance anymore
             })
 
+            prev_total_s = total_s
+            prev_projected_s = projected_s
+            
             max_t = max(max_t, t)
 
     if len(positions) < 2:
         continue
 
     positions.sort(key=lambda p: p["t"])
+
+    # 🕵️ DEBUG: Check for S decrease
+    for i in range(1, len(positions)):
+        if positions[i]["s"] < positions[i-1]["s"]:
+            print(f"⚠️ S DECREASE DETECTED: {driver_code} Time={positions[i]['t']} PrevS={positions[i-1]['s']} CurrS={positions[i]['s']}")
 
     race_data["drivers"][driver] = {
         "driverCode": driver_code,

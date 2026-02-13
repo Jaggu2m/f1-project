@@ -13,7 +13,7 @@ type PositionPoint = {
 };
 
 type RaceData = {
-  track: { points: RawTrackPoint[] };
+  track: { points: RawTrackPoint[]; length?: number };
   drivers: Record<string, DriverData>;
 };
 
@@ -69,12 +69,6 @@ function buildTrack(points: RawTrackPoint[]): TrackPoint[] {
   });
 }
 
-function getNormal(p0: RawTrackPoint, p1: RawTrackPoint) {
-  const dx = p1.x - p0.x;
-  const dy = p1.y - p0.y;
-  const len = Math.hypot(dx, dy) || 1;
-  return { x: -dy / len, y: dx / len };
-}
 
 function positionFromS(s: number, track: TrackPoint[]) {
   const len = track[track.length - 1].s;
@@ -94,6 +88,7 @@ function positionFromS(s: number, track: TrackPoint[]) {
 
 function interpolateLapS(points: PositionPoint[], t: number) {
   if (!points.length) return null;
+
   if (t <= points[0].t) return points[0];
   if (t >= points[points.length - 1].t)
     return points[points.length - 1];
@@ -103,9 +98,18 @@ function interpolateLapS(points: PositionPoint[], t: number) {
 
   const p0 = points[i - 1];
   const p1 = points[i];
+
+  // 🔥 CRITICAL FIX
+  if (p1.lap !== p0.lap) {
+    return p1;   // do not interpolate across lap boundary
+  }
+
   const a = (t - p0.t) / (p1.t - p0.t);
 
-  return { lap: p0.lap, s: p0.s + a * (p1.s - p0.s) };
+  return {
+    lap: p0.lap,
+    s: p0.s + a * (p1.s - p0.s),
+  };
 }
 
 function isInPit(driver: DriverData, raceTime: number) {
@@ -317,22 +321,43 @@ export default function RaceRenderer({ raceTime, raceData }: RaceRendererProps) 
     ctx.clearRect(0, 0, dimensions.width, dimensions.height);
 
     const { minX, minY, scale } = normRef.current;
-    const trackLength = track[track.length - 1].s;
 
     Object.values(raceData.drivers).forEach((driver: DriverData) => {
       const interp = interpolateLapS(driver.positions, raceTime);
       if (!interp) return;
 
-      const raceS = interp.lap * trackLength + interp.s;
+      // Backend 's' is already GLOBAL cumulative distance.
+      // So we do NOT add (lap * length) again.
+      const raceS = interp.s;
       const pos = positionFromS(raceS, track);
       const r = rotate(pos.x, pos.y);
 
       const tx = (r.x - minX) * scale + PADDING;
       const ty = (r.y - minY) * scale + PADDING;
 
+      // 🔬 DEBUG: Log Frontend RaceS
+      if (driver.driverCode === "VER" && Math.floor(raceTime) % 10 === 0) {
+         // console.log("VER RaceS:", raceS); 
+      }
+
       const prev = lastXYRef.current[driver.driverCode];
-      const x = prev ? prev.x + (tx - prev.x) * SMOOTHING : tx;
-      const y = prev ? prev.y + (ty - prev.y) * SMOOTHING : ty;
+      let x = tx;
+      let y = ty;
+
+      if (prev) {
+        const dx = tx - prev.x;
+        const dy = ty - prev.y;
+        const dist = Math.hypot(dx, dy);
+
+        const MAX_SMOOTH_DISTANCE = 40; // pixels
+
+        if (dist < MAX_SMOOTH_DISTANCE) {
+          x = prev.x + dx * SMOOTHING;
+          y = prev.y + dy * SMOOTHING;
+        }
+      }
+
+      lastXYRef.current[driver.driverCode] = { x, y };
 
       lastXYRef.current[driver.driverCode] = { x, y };
 
