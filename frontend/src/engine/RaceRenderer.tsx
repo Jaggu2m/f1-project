@@ -164,6 +164,9 @@ export default function RaceRenderer({ raceTime, raceData }: RaceRendererProps) 
   /* =========================
      DRAW TRACK (TRUE HOLLOW)
   ========================== */
+  /* =========================
+     DRAW TRACK (SECTOR HIGHLIGHTS)
+  ========================== */
   useEffect(() => {
     if (!track.length || !trackCanvas.current || !dimensions.width) return;
 
@@ -198,9 +201,25 @@ export default function RaceRenderer({ raceTime, raceData }: RaceRendererProps) 
     ctx.fillStyle = "#111";
     ctx.fillRect(0, 0, width, height);
 
-    // Build borders
-    const left: { x: number; y: number }[] = [];
-    const right: { x: number; y: number }[] = [];
+    // Prepare Sector Paths
+    const totalLength = track[track.length - 1].s;
+    const s1End = totalLength / 3;
+    const s2End = (totalLength * 2) / 3;
+
+    const sectors = {
+      left: [new Path2D(), new Path2D(), new Path2D()],
+      right: [new Path2D(), new Path2D(), new Path2D()]
+    };
+
+    const getSectorIndex = (s: number) => {
+      if (s < s1End) return 0;
+      if (s < s2End) return 1;
+      return 2;
+    };
+
+    // Calculate boundary points
+    const leftPts: { x: number; y: number; s: number }[] = [];
+    const rightPts: { x: number; y: number; s: number }[] = [];
 
     for (let i = 0; i < track.length - 1; i++) {
       const p = track[i];
@@ -215,39 +234,57 @@ export default function RaceRenderer({ raceTime, raceData }: RaceRendererProps) 
         p.y - n.y * TRACK_HALF_WIDTH
       );
 
-      left.push({
+      leftPts.push({
         x: (l.x - minX) * scale + PADDING,
         y: (l.y - minY) * scale + PADDING,
+        s: p.s
       });
-      right.push({
+      rightPts.push({
         x: (r.x - minX) * scale + PADDING,
         y: (r.y - minY) * scale + PADDING,
+        s: p.s
       });
     }
 
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 1;
+    // Build Paths
+    // We iterate segments i -> i+1
+    for (let i = 0; i < leftPts.length - 1; i++) {
+      const p0 = leftPts[i];
+      const p1 = leftPts[i + 1];
+      const sectorIdx = getSectorIndex(p0.s);
+      
+      const path = sectors.left[sectorIdx];
+      path.moveTo(p0.x, p0.y);
+      path.lineTo(p1.x, p1.y);
 
-    ctx.beginPath();
-    left.forEach((p, i) =>
-      i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)
-    );
-    ctx.stroke();
+      const r0 = rightPts[i];
+      const r1 = rightPts[i + 1];
+      const rPath = sectors.right[sectorIdx];
+      rPath.moveTo(r0.x, r0.y);
+      rPath.lineTo(r1.x, r1.y);
+    }
 
-    ctx.beginPath();
-    right.forEach((p, i) =>
-      i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)
-    );
-    ctx.stroke();
+    // Draw Sectors
+    const colors = ["#00ffff", "#ff00ff", "#ffff00"]; // Cyan, Magenta, Yellow
 
-    // Checkered start line
-    ctx.lineWidth = 4;
-    ctx.setLineDash([8, 8]);
-    ctx.beginPath();
-    ctx.moveTo(left[0].x, left[0].y);
-    ctx.lineTo(right[0].x, right[0].y);
-    ctx.stroke();
-    ctx.setLineDash([]);
+    ctx.lineWidth = 2;
+    [0, 1, 2].forEach(i => {
+      ctx.strokeStyle = colors[i];
+      ctx.stroke(sectors.left[i]);
+      ctx.stroke(sectors.right[i]);
+    });
+
+    // Checkered start line (Reference from first points)
+    if (leftPts.length > 0 && rightPts.length > 0) {
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 4;
+      ctx.setLineDash([8, 8]);
+      ctx.beginPath();
+      ctx.moveTo(leftPts[0].x, leftPts[0].y);
+      ctx.lineTo(rightPts[0].x, rightPts[0].y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
   }, [track, dimensions]);
 
   /* =========================
