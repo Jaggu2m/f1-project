@@ -217,56 +217,73 @@ export default function RaceRenderer({ raceTime, raceData }: RaceRendererProps) 
       return 2;
     };
 
+    // Check if the track data physically repeats the start point at the end
+    // (buildTrack might have added it, or data came that way)
+    const pFirst = track[0];
+    const pLast = track[track.length - 1];
+    const isClosedPhysically = Math.hypot(pFirst.x - pLast.x, pFirst.y - pLast.y) < 2;
+    
+    // If physically closed, we ignore the last point for geometry calculation
+    // to avoid a zero-length segment (A->A) which breaks normals.
+    const effectiveLen = isClosedPhysically ? track.length - 1 : track.length;
+
     // Calculate boundary points
     const leftPts: { x: number; y: number; s: number }[] = [];
     const rightPts: { x: number; y: number; s: number }[] = [];
 
-    for (let i = 0; i < track.length - 1; i++) {
+    for (let i = 0; i < effectiveLen; i++) {
       const p = track[i];
-      const n = getNormal(track[i], track[i + 1]);
+      // Wrap around using effective length
+      const next = track[(i + 1) % effectiveLen]; 
 
-      const l = rotate(
-        p.x + n.x * TRACK_HALF_WIDTH,
-        p.y + n.y * TRACK_HALF_WIDTH
+      const dx = next.x - p.x;
+      const dy = next.y - p.y;
+      const len = Math.hypot(dx, dy) || 1;
+
+      const nx = -dy / len;
+      const ny = dx / len;
+
+      const leftPoint = rotate(
+        p.x + nx * TRACK_HALF_WIDTH,
+        p.y + ny * TRACK_HALF_WIDTH
       );
-      const r = rotate(
-        p.x - n.x * TRACK_HALF_WIDTH,
-        p.y - n.y * TRACK_HALF_WIDTH
+
+      const rightPoint = rotate(
+        p.x - nx * TRACK_HALF_WIDTH,
+        p.y - ny * TRACK_HALF_WIDTH
       );
 
       leftPts.push({
-        x: (l.x - minX) * scale + PADDING,
-        y: (l.y - minY) * scale + PADDING,
+        x: (leftPoint.x - minX) * scale + PADDING,
+        y: (leftPoint.y - minY) * scale + PADDING,
         s: p.s
       });
       rightPts.push({
-        x: (r.x - minX) * scale + PADDING,
-        y: (r.y - minY) * scale + PADDING,
+        x: (rightPoint.x - minX) * scale + PADDING,
+        y: (rightPoint.y - minY) * scale + PADDING,
         s: p.s
       });
     }
 
     // Build Paths
-    // We iterate segments i -> i+1
-    for (let i = 0; i < leftPts.length - 1; i++) {
-      const p0 = leftPts[i];
-      const p1 = leftPts[i + 1];
-      const sectorIdx = getSectorIndex(p0.s);
-      
-      const path = sectors.left[sectorIdx];
-      path.moveTo(p0.x, p0.y);
-      path.lineTo(p1.x, p1.y);
+    const colors = ["#2a2a2a", "#333", "#2a2a2a"]; // Alternating dark colors
+    
+    // Helper to draw segments
+    const drawRails = (pts: typeof leftPts, sectorPaths: Path2D[]) => {
+       for (let i = 0; i < pts.length; i++) {
+         const pCurr = pts[i];
+         const pNext = pts[(i + 1) % pts.length]; // Explicit wrap for drawing
+         
+         const idx = getSectorIndex(pCurr.s);
+         sectorPaths[idx].moveTo(pCurr.x, pCurr.y);
+         sectorPaths[idx].lineTo(pNext.x, pNext.y);
+       }
+    };
 
-      const r0 = rightPts[i];
-      const r1 = rightPts[i + 1];
-      const rPath = sectors.right[sectorIdx];
-      rPath.moveTo(r0.x, r0.y);
-      rPath.lineTo(r1.x, r1.y);
-    }
+    drawRails(leftPts, sectors.left);
+    drawRails(rightPts, sectors.right);
 
     // Draw Sectors
-    const colors = ["#00ffff", "#ff00ff", "#ffff00"]; // Cyan, Magenta, Yellow
-
     ctx.lineWidth = 2;
     [0, 1, 2].forEach(i => {
       ctx.strokeStyle = colors[i];

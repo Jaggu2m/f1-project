@@ -118,7 +118,10 @@ export default function ReplayController() {
         {raceData && (
           <>
             <RaceRenderer raceTime={raceTime} raceData={raceData} />
-            <RaceLeaderboard drivers={raceState} />
+            <RaceLeaderboard 
+              drivers={raceState} 
+              totalLaps={Math.max(...Object.values(raceData.drivers).flatMap(d => d.laps?.map(l => l.lap) || [0]))} 
+            />
           </>
         )}
       </div>

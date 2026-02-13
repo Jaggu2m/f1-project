@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useMemo } from "react";
 
 type PositionPoint = {
   t: number;
@@ -97,17 +97,42 @@ function interpolate(points: PositionPoint[], raceTime: number) {
    FIND TIME FOR GIVEN S
    (Used for gap calculation interpolation)
 ========================= */
+/* =========================
+   FIND TIME FOR GIVEN S (BINARY SEARCH)
+   (Used for gap calculation interpolation)
+========================= */
 function findTimeForS(points: PositionPoint[], targetS: number) {
-  for (let i = 1; i < points.length; i++) {
-    if (points[i].s >= targetS) {
-      const p0 = points[i - 1];
-      const p1 = points[i];
-      if (p1.s === p0.s) return p0.t;
-      const ratio = (targetS - p0.s) / (p1.s - p0.s);
-      return p0.t + ratio * (p1.t - p0.t);
+  if (!points.length) return 0;
+  
+  // Hande out of bounds
+  if (targetS <= points[0].s) return points[0].t;
+  if (targetS >= points[points.length - 1].s) return points[points.length - 1].t;
+
+  // Binary Search for first point where points[i].s >= targetS
+  let low = 0;
+  let high = points.length - 1;
+  
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (points[mid].s < targetS) {
+      low = mid + 1;
+    } else {
+      high = mid;
     }
   }
-  return points[points.length - 1].t;
+  
+  // Now 'low' is the index where points[low].s >= targetS
+  // We want to interpolate between low-1 and low
+  const i = low;
+  const p0 = points[i - 1];
+  const p1 = points[i];
+
+  if (!p0) return p1.t; // Should not happen given bounds checks
+
+  if (p1.s === p0.s) return p0.t;
+  
+  const ratio = (targetS - p0.s) / (p1.s - p0.s);
+  return p0.t + ratio * (p1.t - p0.t);
 }
 
 /* =========================
@@ -207,6 +232,7 @@ export function useRaceState(
     });
 
     // Sort by Total Distance (s) descending
+    // Note: Backend 's' is already cumulative (Race Distance), so a simple sort works.
     states.sort((a, b) => b.s - a.s);
 
     if (!states.length) return [];

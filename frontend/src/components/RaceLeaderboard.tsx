@@ -2,9 +2,12 @@ import { motion, AnimatePresence } from "framer-motion";
 
 type Props = {
   drivers: any[];
+  totalLaps: number;
 };
 
-export default function RaceLeaderboard({ drivers }: Props) {
+export default function RaceLeaderboard({ drivers, totalLaps }: Props) {
+  const currentLap = drivers[0]?.lap || 0;
+
   return (
     <div
       style={{
@@ -22,6 +25,20 @@ export default function RaceLeaderboard({ drivers }: Props) {
         zIndex: 50
       }}
     >
+      {/* LAP COUNTER HEADER */}
+      <div style={{
+        background: "#e10600",
+        color: "white",
+        padding: "12px 20px",
+        borderRadius: 8,
+        fontWeight: "bold",
+        fontSize: 24,
+        textAlign: "center",
+        marginBottom: 10,
+        boxShadow: "0 4px 12px rgba(0,0,0,0.5)"
+      }}>
+        LAP {currentLap} <span style={{ opacity: 0.6, fontSize: 16 }}>/ {totalLaps}</span>
+      </div>
       <AnimatePresence>
         {drivers.map((d, i) => {
           const isLeader = i === 0;
