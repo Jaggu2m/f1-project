@@ -12,13 +12,6 @@ type PositionPoint = {
   lap: number;
 };
 
-type DriverData = {
-  driverCode: string;
-  team: string;
-  teamColor: string;
-  positions: PositionPoint[];
-};
-
 type RaceData = {
   track: { points: RawTrackPoint[] };
   drivers: Record<string, DriverData>;
@@ -26,6 +19,7 @@ type RaceData = {
 
 type RaceRendererProps = {
   raceTime: number;
+  raceData: RaceData;
 };
 
 type Normalization = {
@@ -34,15 +28,29 @@ type Normalization = {
   scale: number;
 };
 
+type PitStop = {
+  lap: number;
+  enter: number;
+  exit: number;
+};
+
+type DriverData = {
+  driverCode: string;
+  team: string;
+  teamColor: string;
+  positions: PositionPoint[];
+  pitStops?: PitStop[];
+};
+
 /* =========================
    CONSTANTS
 ========================= */
-const CANVAS_WIDTH = 1400;
-const CANVAS_HEIGHT = 600;
+
 const PADDING = 60;
+const PIT_ALPHA = 0.25; // opacity when car is in pit
+
 
 const TRACK_HALF_WIDTH = 100; // meters
-const START_LINE_WIDTH = 10; // meters
 const SMOOTHING = 0.25;
 
 /* =========================
@@ -100,36 +108,64 @@ function interpolateLapS(points: PositionPoint[], t: number) {
   return { lap: p0.lap, s: p0.s + a * (p1.s - p0.s) };
 }
 
+function isInPit(driver: DriverData, raceTime: number) {
+  return driver.pitStops?.some(
+    p => raceTime >= p.enter && raceTime <= p.exit
+  );
+}
+
 /* =========================
    COMPONENT
 ========================= */
-export default function RaceRenderer({ raceTime }: RaceRendererProps) {
+export default function RaceRenderer({ raceTime, raceData }: RaceRendererProps) {
   const trackCanvas = useRef<HTMLCanvasElement>(null);
   const carCanvas = useRef<HTMLCanvasElement>(null);
 
-  const [raceData, setRaceData] = useState<RaceData | null>(null);
   const [track, setTrack] = useState<TrackPoint[]>([]);
 
   const normRef = useRef<Normalization | null>(null);
   const lastXYRef = useRef<Record<string, { x: number; y: number }>>({});
 
   /* =========================
-     LOAD DATA
+     BUILD TRACK ON DATA CHANGE
   ========================== */
   useEffect(() => {
-    fetch("/race_positions_silverstone_2023_lapaware.json")
-      .then(res => res.json())
-      .then(data => {
-        setRaceData(data);
-        setTrack(buildTrack(data.track.points));
-      });
+    if (raceData?.track?.points) {
+      setTrack(buildTrack(raceData.track.points));
+    }
+  }, [raceData]);
+
+  /* =========================
+     DRAW TRACK (TRUE HOLLOW)
+  ========================== */
+  /* =========================
+     FULL SCREEN RESIZE
+  ========================== */
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    
+    const obs = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setDimensions({
+          width: entry.contentRect.width,
+          height: entry.contentRect.height
+        });
+      }
+    });
+
+    obs.observe(containerRef.current);
+    return () => obs.disconnect();
   }, []);
+
 
   /* =========================
      DRAW TRACK (TRUE HOLLOW)
   ========================== */
   useEffect(() => {
-    if (!track.length || !trackCanvas.current) return;
+    if (!track.length || !trackCanvas.current || !dimensions.width) return;
 
     const rotated = track.map(p => rotate(p.x, p.y));
 
@@ -143,20 +179,24 @@ export default function RaceRenderer({ raceTime }: RaceRendererProps) {
       maxY = Math.max(maxY, p.y);
     });
 
+    // Fit to container
+    const width = dimensions.width;
+    const height = dimensions.height;
+
     const scale = Math.min(
-      (CANVAS_WIDTH - PADDING * 2) / (maxX - minX),
-      (CANVAS_HEIGHT - PADDING * 2) / (maxY - minY)
+      (width - PADDING * 2) / (maxX - minX),
+      (height - PADDING * 2) / (maxY - minY)
     );
 
     normRef.current = { minX, minY, scale };
 
     const ctx = trackCanvas.current.getContext("2d")!;
-    trackCanvas.current.width = CANVAS_WIDTH;
-    trackCanvas.current.height = CANVAS_HEIGHT;
+    trackCanvas.current.width = width;
+    trackCanvas.current.height = height;
 
     // Background
     ctx.fillStyle = "#111";
-    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    ctx.fillRect(0, 0, width, height);
 
     // Build borders
     const left: { x: number; y: number }[] = [];
@@ -208,24 +248,24 @@ export default function RaceRenderer({ raceTime }: RaceRendererProps) {
     ctx.lineTo(right[0].x, right[0].y);
     ctx.stroke();
     ctx.setLineDash([]);
-  }, [track]);
+  }, [track, dimensions]);
 
   /* =========================
-     DRAW CARS
-  ========================== */
+   DRAW CARS (WITH PIT FADE)
+  ========================= */
   useEffect(() => {
-    if (!raceData || !track.length || !normRef.current || !carCanvas.current)
+    if (!raceData || !track.length || !normRef.current || !carCanvas.current || !dimensions.width)
       return;
 
     const ctx = carCanvas.current.getContext("2d")!;
-    carCanvas.current.width = CANVAS_WIDTH;
-    carCanvas.current.height = CANVAS_HEIGHT;
-    ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    carCanvas.current.width = dimensions.width;
+    carCanvas.current.height = dimensions.height;
+    ctx.clearRect(0, 0, dimensions.width, dimensions.height);
 
     const { minX, minY, scale } = normRef.current;
     const trackLength = track[track.length - 1].s;
 
-    Object.values(raceData.drivers).forEach(driver => {
+    Object.values(raceData.drivers).forEach((driver: DriverData) => {
       const interp = interpolateLapS(driver.positions, raceTime);
       if (!interp) return;
 
@@ -242,20 +282,29 @@ export default function RaceRenderer({ raceTime }: RaceRendererProps) {
 
       lastXYRef.current[driver.driverCode] = { x, y };
 
+      // ✅ PIT FADE LOGIC
+      const inPit = isInPit(driver, raceTime);
+      ctx.globalAlpha = inPit ? PIT_ALPHA : 1.0;
+
+      // Car
       ctx.fillStyle = driver.teamColor;
       ctx.beginPath();
       ctx.arc(x, y, 5, 0, Math.PI * 2);
       ctx.fill();
 
+      // Label
       ctx.fillStyle = "#ffffff";
       ctx.fillText(driver.driverCode, x, y - 8);
+
+      // 🔑 Reset alpha so next driver is unaffected
+      ctx.globalAlpha = 1.0;
     });
-  }, [raceTime, raceData, track]);
+  }, [raceTime, raceData, track, dimensions]);
 
   return (
-    <div style={{ position: "relative", width: CANVAS_WIDTH, height: CANVAS_HEIGHT }}>
-      <canvas ref={trackCanvas} style={{ position: "absolute" }} />
-      <canvas ref={carCanvas} style={{ position: "absolute" }} />
+    <div ref={containerRef} style={{ position: "relative", width: "100%", height: "100%", background: "#111" }}>
+      <canvas ref={trackCanvas} style={{ position: "absolute", top: 0, left: 0 }} />
+      <canvas ref={carCanvas} style={{ position: "absolute", top: 0, left: 0 }} />
     </div>
   );
 }
