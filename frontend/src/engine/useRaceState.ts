@@ -268,10 +268,14 @@ export function useRaceState(
         return;
       }
 
-      // Gap to leader (time-based)
-      const leaderTimeAtSameS = findTimeForS(leaderData.positions, driverState.s);
+      // Distance traveled by this driver (normalized, removes starting offset)
+      const myDistTraveled = (driverState as any)._distanceTraveled || 0;
+
+      // Gap to leader: find when leader had traveled the same distance
+      const leaderFirstS = firstSMap[leader.driverCode] ?? 0;
+      const leaderSAtSameDist = myDistTraveled + leaderFirstS; // translate to leader's raw s
+      const leaderTimeAtSameS = findTimeForS(leaderData.positions, leaderSAtSameDist);
       const rawGap = raceTime - leaderTimeAtSameS;
-      // Round to 0.01s to prevent thousandths jitter, clamp noise to 0
       driverState.gap = rawGap > 0.05 ? Math.round(rawGap * 100) / 100 : 0;
 
       // 2. INTERVAL TO CAR AHEAD
@@ -280,9 +284,10 @@ export function useRaceState(
       const aheadData = aheadKey ? raceData.drivers[aheadKey] : null;
 
       if (aheadData) {
-        const aheadTimeAtSameS = findTimeForS(aheadData.positions, driverState.s);
+        const aheadFirstS = firstSMap[ahead.driverCode] ?? 0;
+        const aheadSAtSameDist = myDistTraveled + aheadFirstS; // translate to ahead's raw s
+        const aheadTimeAtSameS = findTimeForS(aheadData.positions, aheadSAtSameDist);
         const rawInterval = raceTime - aheadTimeAtSameS;
-        // Round to 0.01s to prevent thousandths jitter, clamp noise to 0
         driverState.interval = rawInterval > 0.05 ? Math.round(rawInterval * 100) / 100 : 0;
       } else {
         driverState.interval = 0;
