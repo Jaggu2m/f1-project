@@ -48,10 +48,11 @@ type DriverData = {
 
 const PADDING = 60;
 const PIT_ALPHA = 0.25; // opacity when car is in pit
+const PIT_OFFSET = 30;  // pixels sideways from racing line for pit lane
 
 
 const TRACK_HALF_WIDTH = 100; // meters
-const SMOOTHING = 0.6;  // Higher = snappier (0-1). Frame-rate independent below.
+const SMOOTHING = 0.15;  // Lower = smoother/floatier, higher = snappier (0-1).
 
 /* =========================
    UTILS
@@ -328,17 +329,48 @@ export default function RaceRenderer({ raceTime, raceData }: RaceRendererProps) 
       if (!interp) return;
 
       // Backend 's' is already GLOBAL cumulative distance.
-      // So we do NOT add (lap * length) again.
       const raceS = interp.s;
-      const pos = positionFromS(raceS, track);
-      const r = rotate(pos.x, pos.y);
+      const basePos = positionFromS(raceS, track);
+      const r = rotate(basePos.x, basePos.y);
 
-      const tx = (r.x - minX) * scale + PADDING;
-      const ty = (r.y - minY) * scale + PADDING;
+      let tx = (r.x - minX) * scale + PADDING;
+      let ty = (r.y - minY) * scale + PADDING;
 
-      // 🔬 DEBUG: Log Frontend RaceS
-      if (driver.driverCode === "VER" && Math.floor(raceTime) % 10 === 0) {
-         // console.log("VER RaceS:", raceS); 
+      // Pit lane offset: move car sideways off racing line
+      const activePit = driver.pitStops?.find(
+        p => raceTime >= p.enter && raceTime <= p.exit
+      );
+
+      if (activePit) {
+        // Compute track direction normal for lateral offset
+        const aheadPos = positionFromS(raceS + 10, track);
+        const rAhead = rotate(aheadPos.x, aheadPos.y);
+        const atx = (rAhead.x - minX) * scale + PADDING;
+        const aty = (rAhead.y - minY) * scale + PADDING;
+
+        const dirX = atx - tx;
+        const dirY = aty - ty;
+        const dirLen = Math.hypot(dirX, dirY) || 1;
+
+        // Normal perpendicular to track direction
+        const nx = -dirY / dirLen;
+        const ny = dirX / dirLen;
+
+        // Smooth transition: ease in/out over 3 seconds at pit boundaries
+        const TRANSITION = 3;
+        const pitDuration = activePit.exit - activePit.enter;
+        const elapsed = raceTime - activePit.enter;
+        const remaining = activePit.exit - raceTime;
+
+        let blend = 1;
+        if (elapsed < TRANSITION) {
+          blend = elapsed / TRANSITION; // ease in
+        } else if (remaining < TRANSITION && pitDuration > TRANSITION * 2) {
+          blend = remaining / TRANSITION; // ease out
+        }
+
+        tx += nx * PIT_OFFSET * blend;
+        ty += ny * PIT_OFFSET * blend;
       }
 
       const prev = lastXYRef.current[driver.driverCode];
@@ -350,7 +382,7 @@ export default function RaceRenderer({ raceTime, raceData }: RaceRendererProps) 
         const dy = ty - prev.y;
         const dist = Math.hypot(dx, dy);
 
-        const MAX_SMOOTH_DISTANCE = 200; // pixels — generous threshold for high speed
+        const MAX_SMOOTH_DISTANCE = 200;
 
         if (dist < MAX_SMOOTH_DISTANCE) {
           x = prev.x + dx * SMOOTHING;
@@ -360,11 +392,11 @@ export default function RaceRenderer({ raceTime, raceData }: RaceRendererProps) 
 
       lastXYRef.current[driver.driverCode] = { x, y };
 
-      // ✅ PIT FADE LOGIC
+      // PIT visual style
       const inPit = isInPit(driver, raceTime);
       ctx.globalAlpha = inPit ? PIT_ALPHA : 1.0;
 
-      // Car
+      // Car dot
       ctx.fillStyle = driver.teamColor;
       ctx.beginPath();
       ctx.arc(x, y, 5, 0, Math.PI * 2);
@@ -372,9 +404,16 @@ export default function RaceRenderer({ raceTime, raceData }: RaceRendererProps) 
 
       // Label
       ctx.fillStyle = "#ffffff";
-      ctx.fillText(driver.driverCode, x, y - 8);
+      ctx.font = "11px sans-serif";
+      ctx.fillText(driver.driverCode, x + 7, y + 4);
 
-      // 🔑 Reset alpha so next driver is unaffected
+      // PIT badge next to car
+      if (inPit) {
+        ctx.fillStyle = "#cc0000";
+        ctx.font = "bold 9px sans-serif";
+        ctx.fillText("PIT", x + 7, y + 14);
+      }
+
       ctx.globalAlpha = 1.0;
     });
   }, [raceTime, raceData, track, dimensions]);

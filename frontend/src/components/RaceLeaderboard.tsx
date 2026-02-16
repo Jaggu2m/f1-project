@@ -115,29 +115,34 @@ export default function RaceLeaderboard({ drivers, totalLaps }: Props) {
               </div>
 
               {/* INTERVAL */}
-              <div style={{ width: 50, textAlign: "right" }}>
+              <div style={{ width: 60, textAlign: "right" }}>
                  <div style={{ fontSize: 10, color: "#666", marginBottom: 2 }}>INT</div>
-                 <div style={{ fontSize: isLeader ? 14 : 12, color: "#aaa" }}>
+                 <div style={{ fontSize: isLeader ? 14 : 12, color: "#aaa", fontVariantNumeric: "tabular-nums" }}>
                     {i === 0 
                       ? "—" 
                       : d.interval < 0 
                         ? `+${Math.abs(d.interval)}L`
-                        : `+${d.interval.toFixed(3)}`
+                        : d.interval === 0 
+                          ? "—"
+                          : `+${d.interval.toFixed(3)}`
                     }
                  </div>
               </div>
 
               {/* GAP */}
-              <div style={{ width: 50, textAlign: "right" }}>
+              <div style={{ width: 60, textAlign: "right" }}>
                 <div style={{ fontSize: 10, color: "#666", marginBottom: 2 }}>GAP</div>
                 <div style={{ 
                   fontSize: isLeader ? 14 : 12, 
-                  color: isLeader ? "#aaa" : "#888" 
+                  color: isLeader ? "#aaa" : "#888",
+                  fontVariantNumeric: "tabular-nums"
                 }}>
                   {d.gap === 0 && isLeader
                     ? "—"
                     : d.gap < 0
                     ? `+${Math.abs(d.gap)}L`
+                    : d.gap === 0
+                    ? "—"
                     : `+${d.gap.toFixed(3)}`}
                 </div>
               </div>

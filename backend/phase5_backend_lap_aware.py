@@ -150,6 +150,20 @@ for driver in drivers:
             "s2": s2,
             "s3": s3
         })
+
+        # Pit Stop Detection
+        if pd.notna(lap.get("PitInTime")):
+            pit_enter = (lap["PitInTime"] - race_start_time).total_seconds()
+            # PitOutTime may be on the NEXT lap row, so use it if available, else estimate
+            if pd.notna(lap.get("PitOutTime")):
+                pit_exit = (lap["PitOutTime"] - race_start_time).total_seconds()
+            else:
+                pit_exit = pit_enter + 25  # ~25s typical pit stop
+            pit_stops.append({
+                "lap": lap_no,
+                "enter": float(pit_enter),
+                "exit": float(pit_exit)
+            })
         
         # Position Data for this Lap
         lap_start = lap["LapStartTime"]

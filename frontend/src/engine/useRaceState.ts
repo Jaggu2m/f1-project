@@ -148,6 +148,7 @@ export function useRaceState(
 
     const states: DriverState[] = [];
     const globalBest = raceData.bestSectors || { s1: null, s2: null, s3: null };
+    const trackLen = raceData.track.length || 58000;
 
     /* ---- Build live position state ---- */
     Object.values(raceData.drivers).forEach((driver) => {
@@ -160,69 +161,61 @@ export function useRaceState(
         (pit) => raceTime >= pit.enter && raceTime <= pit.exit
       ) ?? false;
 
+      // Derive lap from cumulative distance (s / trackLength)
+      // Backend s is cumulative distance; trackLen is the full circuit length
+      const derivedLap = Math.max(1, Math.floor(interp.s / trackLen) + 1);
+
       // ---- REAL TIMING LOGIC ----
       const sectors: DriverState["sectors"] = { s1: null, s2: null, s3: null };
       
-      // We look at previous laps (history) AND current lap (if sector finished)
-      // Actually, standard HUD shows CURRENT lap's sectors as they complete.
-      // So we find the LapData for the current lap (or previous if just finished).
-      
-      // Strategy: Iterate all laps up to current. Fill sectors. 
-      // If we want "Flash latest", we focus on current lap.
-      // If we want "Leaderboard table", we usually show the current LATEST completed sectors of the ongoing lap.
-      
-      // 1. Find Data for the lap coincident with raceTime
-      // NOTE: interp.lap is 0-based in positions? Backend says lap "1" is first lap. 
-      // Let's check backend. py: `lap_no = int(lap["LapNumber"])` -> 1-based.
-      // py positions: `lap = lap_no - 1` -> 0-based.
-      // So interp.lap + 1 = LapNumber.
-      
-      const currentLapNum = interp.lap + 1;
+      const currentLapNum = derivedLap;
       
       // We need to look up this lap in driver.laps
       const lapData = driver.laps?.find(l => l.lap === currentLapNum);
+      // Also check previous lap for sector latch fallback
+      const prevLapData = driver.laps?.find(l => l.lap === currentLapNum - 1);
       
       if (lapData) {
         const { startTime, s1, s2, s3 } = lapData;
         const driverBest = driver.bestSectors || { s1: null, s2: null, s3: null };
         const EPSILON = 0.005;
 
-        // Helper for Colors
         const getColor = (val: number, type: "s1" | "s2" | "s3") => {
-           // Purple: Global Best (ignoring floating point noise)
            if (globalBest[type] && val <= globalBest[type]! + EPSILON) return "purple";
-           // Green: Personal Best
            if (driverBest[type] && val <= driverBest[type]! + EPSILON) return "green";
-           // Yellow: Standard
            return "yellow";
         };
 
-        // Reveal logic: If raceTime > startTime + sectorDuration, show it.
-        // S1
         if (s1 && raceTime >= startTime + s1) {
           sectors.s1 = { time: s1, color: getColor(s1, "s1") };
         }
         
-        // S2 (Revealed when S1+S2 done)
         if (s1 && s2 && raceTime >= startTime + s1 + s2) {
           sectors.s2 = { time: s2, color: getColor(s2, "s2") };
         }
 
-        // S3 (Revealed when lap done)
         if (s1 && s2 && s3 && raceTime >= startTime + s1 + s2 + s3) {
            sectors.s3 = { time: s3, color: getColor(s3, "s3") };
         }
+      } else if (prevLapData) {
+        // Fallback: show previous lap's sectors if current lap data not yet available
+        const driverBest = driver.bestSectors || { s1: null, s2: null, s3: null };
+        const EPSILON = 0.005;
+        const getColor = (val: number, type: "s1" | "s2" | "s3") => {
+           if (globalBest[type] && val <= globalBest[type]! + EPSILON) return "purple";
+           if (driverBest[type] && val <= driverBest[type]! + EPSILON) return "green";
+           return "yellow";
+        };
+        const { s1, s2, s3 } = prevLapData;
+        if (s1) sectors.s1 = { time: s1, color: getColor(s1, "s1") };
+        if (s2) sectors.s2 = { time: s2, color: getColor(s2, "s2") };
+        if (s3) sectors.s3 = { time: s3, color: getColor(s3, "s3") };
       }
-
-      // Fallback: If we are in "Lap 2", we might want to keep showing Lap 1's times until new S1?
-      // Ususally F1 leaderboard clears sectors on new lap start. 
-      // Current logic clears them because `lapData` switches to new lap (where s1 not detected yet).
-      // This mimics real TV behavior (empty until S1 line). perfect.
 
       states.push({
         driverCode: driver.driverCode,
         teamColor: driver.teamColor,
-        lap: interp.lap, // 0-based used for sorting usually
+        lap: derivedLap,
         s: interp.s,
         gap: 0, 
         interval: 0,
@@ -251,14 +244,19 @@ export function useRaceState(
       (d as any)._distanceTraveled = d.s - firstS;
     });
 
-    // Sort by distance traveled (descending = furthest ahead first)
-    states.sort((a, b) => ((b as any)._distanceTraveled || 0) - ((a as any)._distanceTraveled || 0));
+    // Stable sort: tiebreaker on driverCode prevents same-distance drivers from flickering
+    states.sort((a, b) => {
+      const diff = ((b as any)._distanceTraveled || 0) - ((a as any)._distanceTraveled || 0);
+      if (Math.abs(diff) < 0.5) return a.driverCode.localeCompare(b.driverCode); // Stable tiebreaker
+      return diff;
+    });
 
     if (!states.length) return [];
 
-    /* ---- Compute Gaps (Same as before) ---- */
+    /* ---- Compute Gaps (Smoothed) ---- */
     const leader = states[0];
-    const leaderData = raceData.drivers[Object.keys(raceData.drivers).find(k => raceData.drivers[k].driverCode === leader.driverCode)!];
+    const leaderKey = driverKeys.find(k => raceData.drivers[k].driverCode === leader.driverCode);
+    const leaderData = leaderKey ? raceData.drivers[leaderKey] : null;
 
     if (!leaderData) return states;
 
@@ -270,37 +268,24 @@ export function useRaceState(
         return;
       }
 
-      const lapDiffLeader = leader.lap - driverState.lap;
-      if (lapDiffLeader > 0) {
-        driverState.gap = -lapDiffLeader;
-      } else {
-        const leaderTimeAtSameS = findTimeForS(
-          leaderData.positions,
-          driverState.s
-        );
-        const g = raceTime - leaderTimeAtSameS;
-        driverState.gap = g > 0 ? g : 0;
-      }
+      // Gap to leader (time-based)
+      const leaderTimeAtSameS = findTimeForS(leaderData.positions, driverState.s);
+      const rawGap = raceTime - leaderTimeAtSameS;
+      // Round to 0.01s to prevent thousandths jitter, clamp noise to 0
+      driverState.gap = rawGap > 0.05 ? Math.round(rawGap * 100) / 100 : 0;
 
-      // 2. INTERVAL
+      // 2. INTERVAL TO CAR AHEAD
       const ahead = states[index - 1];
-      const lapDiffAhead = ahead.lap - driverState.lap;
-      
-      if (lapDiffAhead > 0) {
-        driverState.interval = -lapDiffAhead;
-      } else {
-        const aheadCode = ahead.driverCode;
-        const aheadDriverKey = Object.keys(raceData.drivers).find(k => raceData.drivers[k].driverCode === aheadCode);
-        const aheadData = aheadDriverKey ? raceData.drivers[aheadDriverKey] : null;
+      const aheadKey = driverKeys.find(k => raceData.drivers[k].driverCode === ahead.driverCode);
+      const aheadData = aheadKey ? raceData.drivers[aheadKey] : null;
 
-        if (aheadData) {
-          const aheadTimeAtSameS = findTimeForS(
-            aheadData.positions,
-            driverState.s
-          );
-          const intv = raceTime - aheadTimeAtSameS;
-          driverState.interval = intv > 0 ? intv : 0;
-        }
+      if (aheadData) {
+        const aheadTimeAtSameS = findTimeForS(aheadData.positions, driverState.s);
+        const rawInterval = raceTime - aheadTimeAtSameS;
+        // Round to 0.01s to prevent thousandths jitter, clamp noise to 0
+        driverState.interval = rawInterval > 0.05 ? Math.round(rawInterval * 100) / 100 : 0;
+      } else {
+        driverState.interval = 0;
       }
     });
 
