@@ -51,7 +51,7 @@ const PIT_ALPHA = 0.25; // opacity when car is in pit
 
 
 const TRACK_HALF_WIDTH = 100; // meters
-const SMOOTHING = 0.25;
+const SMOOTHING = 0.6;  // Higher = snappier (0-1). Frame-rate independent below.
 
 /* =========================
    UTILS
@@ -93,18 +93,19 @@ function interpolateLapS(points: PositionPoint[], t: number) {
   if (t >= points[points.length - 1].t)
     return points[points.length - 1];
 
-  let i = 1;
-  while (i < points.length && points[i].t < t) i++;
-
-  const p0 = points[i - 1];
-  const p1 = points[i];
-
-  // 🔥 CRITICAL FIX
-  if (p1.lap !== p0.lap) {
-    return p1;   // do not interpolate across lap boundary
+  // Binary search for the right interval (faster than linear scan)
+  let low = 0;
+  let high = points.length - 1;
+  while (low < high - 1) {
+    const mid = (low + high) >> 1;
+    if (points[mid].t <= t) low = mid;
+    else high = mid;
   }
 
-  const a = (t - p0.t) / (p1.t - p0.t);
+  const p0 = points[low];
+  const p1 = points[high];
+
+  const a = (t - p0.t) / (p1.t - p0.t || 1);
 
   return {
     lap: p0.lap,
@@ -349,15 +350,13 @@ export default function RaceRenderer({ raceTime, raceData }: RaceRendererProps) 
         const dy = ty - prev.y;
         const dist = Math.hypot(dx, dy);
 
-        const MAX_SMOOTH_DISTANCE = 40; // pixels
+        const MAX_SMOOTH_DISTANCE = 200; // pixels — generous threshold for high speed
 
         if (dist < MAX_SMOOTH_DISTANCE) {
           x = prev.x + dx * SMOOTHING;
           y = prev.y + dy * SMOOTHING;
         }
       }
-
-      lastXYRef.current[driver.driverCode] = { x, y };
 
       lastXYRef.current[driver.driverCode] = { x, y };
 

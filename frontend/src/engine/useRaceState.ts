@@ -231,9 +231,28 @@ export function useRaceState(
       });
     });
 
-    // Sort by Total Distance (s) descending
-    // Note: Backend 's' is already cumulative (Race Distance), so a simple sort works.
-    states.sort((a, b) => b.s - a.s);
+    // Sort by DISTANCE TRAVELED, not raw s.
+    // Raw s is wrong because drivers behind the start line have initial s ≈ TRACK_LENGTH,
+    // making them appear ahead. Distance traveled = current_s - first_s for each driver.
+    const driverKeys = Object.keys(raceData.drivers);
+    
+    // Build a map of each driver's first s value (their starting position on the track)
+    const firstSMap: Record<string, number> = {};
+    driverKeys.forEach(key => {
+      const d = raceData.drivers[key];
+      if (d.positions && d.positions.length > 0) {
+        firstSMap[d.driverCode] = d.positions[0].s;
+      }
+    });
+
+    // Compute distance traveled for sorting
+    states.forEach(d => {
+      const firstS = firstSMap[d.driverCode] ?? 0;
+      (d as any)._distanceTraveled = d.s - firstS;
+    });
+
+    // Sort by distance traveled (descending = furthest ahead first)
+    states.sort((a, b) => ((b as any)._distanceTraveled || 0) - ((a as any)._distanceTraveled || 0));
 
     if (!states.length) return [];
 
