@@ -1,4 +1,5 @@
 import { motion, AnimatePresence } from "framer-motion";
+import { useRef, useEffect } from "react";
 
 type Props = {
   drivers: any[];
@@ -6,7 +7,22 @@ type Props = {
 };
 
 export default function RaceLeaderboard({ drivers, totalLaps }: Props) {
+  const prevOrderRef = useRef<string[]>([]);
+
   const currentLap = drivers[0]?.lap || 0;
+
+  // Track position change
+  useEffect(() => {
+    prevOrderRef.current = drivers.map(d => d.driverCode);
+  }, [drivers]);
+
+  const getTyreColor = (compound?: string) => {
+    if (!compound) return "#444";
+    if (compound.includes("SOFT")) return "#ff2e2e";
+    if (compound.includes("MEDIUM")) return "#ffd000";
+    if (compound.includes("HARD")) return "#ffffff";
+    return "#888";
+  };
 
   return (
     <div
@@ -14,8 +30,7 @@ export default function RaceLeaderboard({ drivers, totalLaps }: Props) {
         position: "absolute",
         top: 20,
         right: 20,
-        bottom: 20,
-        width: 450,
+        width: 420,
         display: "flex",
         flexDirection: "column",
         gap: 6,
@@ -25,23 +40,33 @@ export default function RaceLeaderboard({ drivers, totalLaps }: Props) {
         zIndex: 50
       }}
     >
-      {/* LAP COUNTER HEADER */}
-      <div style={{
-        background: "#e10600",
-        color: "white",
-        padding: "12px 20px",
-        borderRadius: 8,
-        fontWeight: "bold",
-        fontSize: 24,
-        textAlign: "center",
-        marginBottom: 10,
-        boxShadow: "0 4px 12px rgba(0,0,0,0.5)"
-      }}>
-        LAP {currentLap} <span style={{ opacity: 0.6, fontSize: 16 }}>/ {totalLaps}</span>
+      {/* HEADER */}
+      <div
+        style={{
+          background: "#e10600",
+          padding: "12px 20px",
+          borderRadius: 8,
+          fontWeight: "bold",
+          fontSize: 22,
+          textAlign: "center",
+          marginBottom: 10
+        }}
+      >
+        LAP {currentLap}{" "}
+        <span style={{ opacity: 0.6, fontSize: 14 }}>
+          / {totalLaps}
+        </span>
       </div>
+
       <AnimatePresence>
         {drivers.map((d, i) => {
           const isLeader = i === 0;
+          const isBattle = d.interval > 0 && d.interval < 1;
+
+          const prevIndex = prevOrderRef.current.indexOf(d.driverCode);
+          const positionChange =
+            prevIndex !== -1 ? prevIndex - i : 0;
+
           return (
             <motion.div
               layout
@@ -54,99 +79,86 @@ export default function RaceLeaderboard({ drivers, totalLaps }: Props) {
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
-                background: isLeader ? "#1a1a1a" : "rgba(0,0,0,0.6)",
-                padding: isLeader ? "16px 20px" : "8px 12px",
-                borderRadius: isLeader ? 8 : 4,
-                borderLeft: `6px solid ${d.teamColor}`,
-                flex: isLeader ? "0 0 auto" : "1 1 auto",
-                // Leader specific scaling
-                transformOrigin: "right center",
-                boxShadow: isLeader ? "0 4px 12px rgba(0,0,0,0.5)" : "none",
-                marginBottom: isLeader ? 12 : 0,
-                minHeight: 0 // Allow shrinking if squashed
+                background: isBattle
+                  ? "rgba(255,255,0,0.08)"
+                  : isLeader
+                  ? "#1a1a1a"
+                  : "rgba(0,0,0,0.6)",
+                padding: isLeader ? "14px 18px" : "8px 12px",
+                borderRadius: 6,
+                borderLeft: `6px solid ${d.teamColor}`
               }}
             >
+              {/* LEFT SIDE */}
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <span style={{ 
-                  width: 24, 
-                  fontWeight: "bold", 
-                  fontSize: isLeader ? 24 : 14,
-                  color: isLeader ? "#ffd700" : "#ccc"
-                }}>
+                <span
+                  style={{
+                    width: 24,
+                    fontWeight: "bold",
+                    fontSize: isLeader ? 22 : 14,
+                    color: isLeader ? "#ffd700" : "#ccc"
+                  }}
+                >
                   {i + 1}
                 </span>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ 
-                    fontWeight: "bold", 
-                    fontSize: isLeader ? 28 : 16,
-                    letterSpacing: isLeader ? 1 : 0
-                  }}>
-                    {d.driverCode}
-                  </span>
-                  {d.inPit && (
-                    <span style={{
+
+                {/* Position change */}
+                <span style={{ fontSize: 12 }}>
+                  {positionChange > 0 && (
+                    <span style={{ color: "#00ff00" }}>
+                      ▲{positionChange}
+                    </span>
+                  )}
+                  {positionChange < 0 && (
+                    <span style={{ color: "#ff3c3c" }}>
+                      ▼{Math.abs(positionChange)}
+                    </span>
+                  )}
+                </span>
+
+                <span
+                  style={{
+                    fontWeight: "bold",
+                    fontSize: isLeader ? 24 : 16
+                  }}
+                >
+                  {d.driverCode}
+                </span>
+
+                {/* Tyre */}
+                <div
+                  style={{
+                    width: 12,
+                    height: 12,
+                    borderRadius: "50%",
+                    background: getTyreColor(d.compound),
+                    border: "1px solid #222"
+                  }}
+                />
+
+                {d.inPit && (
+                  <span
+                    style={{
                       background: "#c00",
-                      color: "#fff",
                       fontSize: 10,
                       padding: "2px 4px",
                       borderRadius: 3,
                       fontWeight: "bold"
-                    }}>
-                      PIT
-                    </span>
-                  )}
-                </div>
+                    }}
+                  >
+                    PIT
+                  </span>
+                )}
               </div>
 
-            <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-              {/* SECTORS */}
-              <div style={{ display: "flex", gap: 4 }}>
-                {[d.sectors?.s1, d.sectors?.s2, d.sectors?.s3].map((s, idx) => (
-                   <div key={idx} style={{ 
-                     width: 42, 
-                     textAlign: "center",
-                     fontSize: 12,
-                     fontWeight: "bold",
-                     color: !s ? "#333" : s.color === "purple" ? "#d205df" : s.color === "green" ? "#00ff00" : "#ffcc00"
-                   }}>
-                     {s ? s.time.toFixed(1) : ""}
-                   </div>
-                ))}
+              {/* RIGHT SIDE */}
+              <div style={{ textAlign: "right", minWidth: 60 }}>
+                {i === 0 ? (
+                  "Interval"
+                ) : (
+                  `+${d.interval.toFixed(3)}`
+                )}
               </div>
-
-              {/* INTERVAL */}
-              <div style={{ width: 60, textAlign: "right" }}>
-                 <div style={{ fontSize: 10, color: "#666", marginBottom: 2 }}>INT</div>
-                 <div style={{ fontSize: isLeader ? 14 : 12, color: "#aaa", fontVariantNumeric: "tabular-nums" }}>
-                    {i === 0 
-                      ? "—" 
-                      : d.interval < 0 
-                        ? `+${Math.abs(d.interval)}L`
-                        : d.interval === 0 
-                          ? "—"
-                          : `+${d.interval.toFixed(3)}`
-                    }
-                 </div>
-              </div>
-
-              {/* GAP */}
-              <div style={{ width: 60, textAlign: "right" }}>
-                <div style={{ fontSize: 10, color: "#666", marginBottom: 2 }}>GAP</div>
-                <div style={{ 
-                  fontSize: isLeader ? 14 : 12, 
-                  color: isLeader ? "#aaa" : "#888",
-                  fontVariantNumeric: "tabular-nums"
-                }}>
-                  {d.gap === 0 && isLeader
-                    ? "—"
-                    : d.gap < 0
-                    ? `+${Math.abs(d.gap)}L`
-                    : d.gap === 0
-                    ? "—"
-                    : `+${d.gap.toFixed(3)}`}
-                </div>
-              </div>
-            </div>
             </motion.div>
           );
         })}

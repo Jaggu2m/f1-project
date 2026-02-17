@@ -9,7 +9,7 @@ import pandas as pd
 fastf1.Cache.enable_cache("cache")
 
 SEASON = 2023
-RACE_NAME = "Silverstone"
+RACE_NAME = "Spielberg"
 SESSION = "R"
 
 session = fastf1.get_session(SEASON, RACE_NAME, SESSION)
