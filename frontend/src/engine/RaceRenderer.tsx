@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 /* =========================
    TYPES
@@ -10,22 +10,6 @@ type PositionPoint = {
   t: number;
   s: number;
   lap: number;
-};
-
-type RaceData = {
-  track: { points: RawTrackPoint[]; length?: number };
-  drivers: Record<string, DriverData>;
-};
-
-type RaceRendererProps = {
-  raceTime: number;
-  raceData: RaceData;
-};
-
-type Normalization = {
-  minX: number;
-  minY: number;
-  scale: number;
 };
 
 type PitStop = {
@@ -42,6 +26,24 @@ type DriverData = {
   pitStops?: PitStop[];
 };
 
+type RaceData = {
+  track: { points: RawTrackPoint[]; length?: number };
+  drivers: Record<string, DriverData>;
+};
+
+type RaceRendererProps = {
+  raceTime: number;
+  raceData: RaceData;
+  selectedDriver?: string | null;
+  onDriverSelect?: (code: string) => void;
+};
+
+type Normalization = {
+  minX: number;
+  minY: number;
+  scale: number;
+};
+
 /* =========================
    CONSTANTS
 ========================= */
@@ -50,8 +52,7 @@ const PADDING = 60;
 const PIT_ALPHA = 0.25; // opacity when car is in pit
 const PIT_OFFSET = 30;  // pixels sideways from racing line for pit lane
 
-
-const TRACK_HALF_WIDTH = 100; // meters
+// const TRACK_HALF_WIDTH = 100; // Unused, logic uses 200 * scale straight
 const SMOOTHING = 0.15;  // Lower = smoother/floatier, higher = snappier (0-1).
 
 /* =========================
@@ -114,26 +115,41 @@ function interpolateLapS(points: PositionPoint[], t: number) {
   };
 }
 
-function isInPit(driver: DriverData, raceTime: number) {
-  return driver.pitStops?.some(
-    p => raceTime >= p.enter && raceTime <= p.exit
-  );
-}
-
 /* =========================
    COMPONENT
 ========================= */
-export default function RaceRenderer({ raceTime, raceData }: RaceRendererProps) {
+export default function RaceRenderer({ raceTime, raceData, selectedDriver, onDriverSelect }: RaceRendererProps) {
   const trackCanvas = useRef<HTMLCanvasElement>(null);
   const carCanvas = useRef<HTMLCanvasElement>(null);
 
   const [track, setTrack] = useState<TrackPoint[]>([]);
-
   const normRef = useRef<Normalization | null>(null);
   const lastXYRef = useRef<Record<string, { x: number; y: number }>>({});
+  
+  /* ---- CAMERA STATE ---- */
+  // Target camera state
+  const targetCam = useRef({ x: 0, y: 0, zoom: 1 });
+  // Current camera state (for smoothing)
+  const currentCam = useRef({ x: 0, y: 0, zoom: 1 });
+  const animationFrameRef = useRef<number | null>(null);
+
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  /* ... resize observer ... */
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const obs = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setDimensions({ width: entry.contentRect.width, height: entry.contentRect.height });
+      }
+    });
+    obs.observe(containerRef.current);
+    return () => obs.disconnect();
+  }, []);
 
   /* =========================
-     BUILD TRACK ON DATA CHANGE
+     BUILD TRACK
   ========================== */
   useEffect(() => {
     if (raceData?.track?.points) {
@@ -142,284 +158,239 @@ export default function RaceRenderer({ raceTime, raceData }: RaceRendererProps) 
   }, [raceData]);
 
   /* =========================
-     DRAW TRACK (TRUE HOLLOW)
+     CAMERA LERP LOGIC
   ========================== */
-  /* =========================
-     FULL SCREEN RESIZE
-  ========================== */
-  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
-  const containerRef = useRef<HTMLDivElement>(null);
-
   useEffect(() => {
-    if (!containerRef.current) return;
-    
-    const obs = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        setDimensions({
-          width: entry.contentRect.width,
-          height: entry.contentRect.height
-        });
+    const updateCamera = () => {
+      // 1. Determine Target
+      if (selectedDriver && lastXYRef.current[selectedDriver]) {
+        const carPos = lastXYRef.current[selectedDriver];
+        // We want car to be center. 
+        // Logic: center = (width/2, height/2). 
+        // Transform: translate(width/2, height/2) scale(zoom) translate(-carX, -carY)
+        // Effectively: offset inputs by -carX, -carY, then scale, then center.
+        
+        targetCam.current = {
+          x: carPos.x,
+          y: carPos.y,
+          zoom: 2.5
+        };
+      } else {
+        targetCam.current = {
+          x: dimensions.width / 2, 
+          y: dimensions.height / 2,
+          zoom: 1
+        };
       }
-    });
 
-    obs.observe(containerRef.current);
-    return () => obs.disconnect();
-  }, []);
+      // 2. Lerp
+      const t = 0.1; // Smooth factor
+      currentCam.current.x += (targetCam.current.x - currentCam.current.x) * t;
+      currentCam.current.y += (targetCam.current.y - currentCam.current.y) * t;
+      currentCam.current.zoom += (targetCam.current.zoom - currentCam.current.zoom) * t;
 
+      animationFrameRef.current = requestAnimationFrame(updateCamera);
+    }
+    
+    animationFrameRef.current = requestAnimationFrame(updateCamera);
+    return () => {
+        if(animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+    }
+  }, [selectedDriver, dimensions]); // Depend on dimensions so reset works
 
   /* =========================
-     DRAW TRACK (TRUE HOLLOW)
-  ========================== */
-  /* =========================
-     DRAW TRACK (SECTOR HIGHLIGHTS)
+     DRAW LOOP
   ========================== */
   useEffect(() => {
-    if (!track.length || !trackCanvas.current || !dimensions.width) return;
+    if (!raceData || !track.length || !trackCanvas.current || !carCanvas.current || !dimensions.width) return;
 
-    const rotated = track.map(p => rotate(p.x, p.y));
-
-    let minX = Infinity, maxX = -Infinity;
-    let minY = Infinity, maxY = -Infinity;
-
-    rotated.forEach(p => {
-      minX = Math.min(minX, p.x);
-      maxX = Math.max(maxX, p.x);
-      minY = Math.min(minY, p.y);
-      maxY = Math.max(maxY, p.y);
-    });
-
-    // Fit to container
-    const width = dimensions.width;
-    const height = dimensions.height;
-
-    const scale = Math.min(
-      (width - PADDING * 2) / (maxX - minX),
-      (height - PADDING * 2) / (maxY - minY)
-    );
-
-    normRef.current = { minX, minY, scale };
-
-    const ctx = trackCanvas.current.getContext("2d")!;
-    trackCanvas.current.width = width;
-    trackCanvas.current.height = height;
-
-    // Background
-    ctx.fillStyle = "#111";
-    ctx.fillRect(0, 0, width, height);
-
-    // Prepare Sector Paths
-    const totalLength = track[track.length - 1].s;
-    const s1End = totalLength / 3;
-    const s2End = (totalLength * 2) / 3;
-
-    const sectors = {
-      left: [new Path2D(), new Path2D(), new Path2D()],
-      right: [new Path2D(), new Path2D(), new Path2D()]
-    };
-
-    const getSectorIndex = (s: number) => {
-      if (s < s1End) return 0;
-      if (s < s2End) return 1;
-      return 2;
-    };
-
-    // Check if the track data physically repeats the start point at the end
-    // (buildTrack might have added it, or data came that way)
-    const pFirst = track[0];
-    const pLast = track[track.length - 1];
-    const isClosedPhysically = Math.hypot(pFirst.x - pLast.x, pFirst.y - pLast.y) < 2;
+    const ctxTrack = trackCanvas.current.getContext("2d")!;
+    const ctxCar = carCanvas.current.getContext("2d")!;
     
-    // If physically closed, we ignore the last point for geometry calculation
-    // to avoid a zero-length segment (A->A) which breaks normals.
-    const effectiveLen = isClosedPhysically ? track.length - 1 : track.length;
-
-    // Calculate boundary points
-    const leftPts: { x: number; y: number; s: number }[] = [];
-    const rightPts: { x: number; y: number; s: number }[] = [];
-
-    for (let i = 0; i < effectiveLen; i++) {
-      const p = track[i];
-      // Wrap around using effective length
-      const next = track[(i + 1) % effectiveLen]; 
-
-      const dx = next.x - p.x;
-      const dy = next.y - p.y;
-      const len = Math.hypot(dx, dy) || 1;
-
-      const nx = -dy / len;
-      const ny = dx / len;
-
-      const leftPoint = rotate(
-        p.x + nx * TRACK_HALF_WIDTH,
-        p.y + ny * TRACK_HALF_WIDTH
-      );
-
-      const rightPoint = rotate(
-        p.x - nx * TRACK_HALF_WIDTH,
-        p.y - ny * TRACK_HALF_WIDTH
-      );
-
-      leftPts.push({
-        x: (leftPoint.x - minX) * scale + PADDING,
-        y: (leftPoint.y - minY) * scale + PADDING,
-        s: p.s
-      });
-      rightPts.push({
-        x: (rightPoint.x - minX) * scale + PADDING,
-        y: (rightPoint.y - minY) * scale + PADDING,
-        s: p.s
-      });
-    }
-
-    // Build Paths
-    const colors = ["#2a2a2a", "#333", "#2a2a2a"]; // Alternating dark colors
-    
-    // Helper to draw segments
-    const drawRails = (pts: typeof leftPts, sectorPaths: Path2D[]) => {
-       for (let i = 0; i < pts.length; i++) {
-         const pCurr = pts[i];
-         const pNext = pts[(i + 1) % pts.length]; // Explicit wrap for drawing
-         
-         const idx = getSectorIndex(pCurr.s);
-         sectorPaths[idx].moveTo(pCurr.x, pCurr.y);
-         sectorPaths[idx].lineTo(pNext.x, pNext.y);
-       }
-    };
-
-    drawRails(leftPts, sectors.left);
-    drawRails(rightPts, sectors.right);
-
-    // Draw Sectors
-    ctx.lineWidth = 2;
-    [0, 1, 2].forEach(i => {
-      ctx.strokeStyle = colors[i];
-      ctx.stroke(sectors.left[i]);
-      ctx.stroke(sectors.right[i]);
-    });
-
-    // Checkered start line (Reference from first points)
-    if (leftPts.length > 0 && rightPts.length > 0) {
-      ctx.strokeStyle = "#ffffff";
-      ctx.lineWidth = 4;
-      ctx.setLineDash([8, 8]);
-      ctx.beginPath();
-      ctx.moveTo(leftPts[0].x, leftPts[0].y);
-      ctx.lineTo(rightPts[0].x, rightPts[0].y);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-  }, [track, dimensions]);
-
-  /* =========================
-   DRAW CARS (WITH PIT FADE)
-  ========================= */
-  useEffect(() => {
-    if (!raceData || !track.length || !normRef.current || !carCanvas.current || !dimensions.width)
-      return;
-
-    const ctx = carCanvas.current.getContext("2d")!;
+    trackCanvas.current.width = dimensions.width;
+    trackCanvas.current.height = dimensions.height;
     carCanvas.current.width = dimensions.width;
     carCanvas.current.height = dimensions.height;
-    ctx.clearRect(0, 0, dimensions.width, dimensions.height);
 
+    // --- 1. Compute Base Normalization (Fit to Screen) ---
+    if (!normRef.current) { 
+        const rotated = track.map(p => rotate(p.x, p.y));
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        rotated.forEach(p => {
+            minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+            minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+        });
+        const scale = Math.min(
+            (dimensions.width - PADDING * 2) / (maxX - minX),
+            (dimensions.height - PADDING * 2) / (maxY - minY)
+        );
+        normRef.current = { minX, minY, scale };
+    }
     const { minX, minY, scale } = normRef.current;
 
+    // --- 2. Apply Camera Transform ---
+    const cx = dimensions.width / 2;
+    const cy = dimensions.height / 2;
+    const zoom = currentCam.current.zoom;
+    const tx = currentCam.current.x; 
+    const ty = currentCam.current.y;
+
+    [ctxTrack, ctxCar].forEach(ctx => {
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.scale(zoom, zoom);
+        ctx.translate(-tx, -ty);
+    });
+
+    // --- 3. Draw Track ---
+    // (Simplified drawing for performance)
+    const rotated = track.map(p => rotate(p.x, p.y));
+    const trackWidthPx = 200 * scale; 
+    
+    ctxTrack.lineCap = "round";
+    ctxTrack.lineJoin = "round";
+    
+    // Outer
+    ctxTrack.beginPath();
+    ctxTrack.strokeStyle = "#444";
+    ctxTrack.lineWidth = trackWidthPx;
+    rotated.forEach((p, i) => {
+        const tpx = (p.x - minX) * scale + PADDING;
+        const tpy = (p.y - minY) * scale + PADDING;
+        if(i===0) ctxTrack.moveTo(tpx, tpy);
+        else ctxTrack.lineTo(tpx, tpy);
+    });
+    ctxTrack.stroke();
+    
+    // Inner
+    ctxTrack.strokeStyle = "#222";
+    ctxTrack.lineWidth = trackWidthPx - 4; 
+    ctxTrack.stroke();
+    
+    // Start/Finish Line (Approx)
+    if (rotated.length > 0) {
+        const p0 = rotated[0];
+        const tpx = (p0.x - minX) * scale + PADDING;
+        const tpy = (p0.y - minY) * scale + PADDING;
+        ctxTrack.beginPath();
+        ctxTrack.fillStyle = "#fff";
+        ctxTrack.arc(tpx, tpy, trackWidthPx/2, 0, Math.PI*2);
+        ctxTrack.fill();
+    }
+
+    // --- 4. Draw Cars ---
     Object.values(raceData.drivers).forEach((driver: DriverData) => {
       const interp = interpolateLapS(driver.positions, raceTime);
       if (!interp) return;
 
-      // Backend 's' is already GLOBAL cumulative distance.
       const raceS = interp.s;
       const basePos = positionFromS(raceS, track);
       const r = rotate(basePos.x, basePos.y);
 
-      let tx = (r.x - minX) * scale + PADDING;
-      let ty = (r.y - minY) * scale + PADDING;
+      let cx = (r.x - minX) * scale + PADDING;
+      let cy = (r.y - minY) * scale + PADDING;
 
-      // Pit lane offset: move car sideways off racing line
-      const activePit = driver.pitStops?.find(
-        p => raceTime >= p.enter && raceTime <= p.exit
-      );
-
-      if (activePit) {
-        // Compute track direction normal for lateral offset
-        const aheadPos = positionFromS(raceS + 10, track);
-        const rAhead = rotate(aheadPos.x, aheadPos.y);
-        const atx = (rAhead.x - minX) * scale + PADDING;
-        const aty = (rAhead.y - minY) * scale + PADDING;
-
-        const dirX = atx - tx;
-        const dirY = aty - ty;
-        const dirLen = Math.hypot(dirX, dirY) || 1;
-
-        // Normal perpendicular to track direction
-        const nx = -dirY / dirLen;
-        const ny = dirX / dirLen;
-
-        // Smooth transition: ease in/out over 3 seconds at pit boundaries
-        const TRANSITION = 3;
-        const pitDuration = activePit.exit - activePit.enter;
-        const elapsed = raceTime - activePit.enter;
-        const remaining = activePit.exit - raceTime;
-
-        let blend = 1;
-        if (elapsed < TRANSITION) {
-          blend = elapsed / TRANSITION; // ease in
-        } else if (remaining < TRANSITION && pitDuration > TRANSITION * 2) {
-          blend = remaining / TRANSITION; // ease out
-        }
-
-        tx += nx * PIT_OFFSET * blend;
-        ty += ny * PIT_OFFSET * blend;
+      // Pit offset logic 
+      const activePit = driver.pitStops?.find(p => raceTime >= p.enter && raceTime <= p.exit);
+      if(activePit) { 
+         // Simplified pit offset just to separate visually
+         const aheadPos = positionFromS(raceS + 10, track);
+         const rAhead = rotate(aheadPos.x, aheadPos.y);
+         const ax = (rAhead.x - minX) * scale + PADDING;
+         const ay = (rAhead.y - minY) * scale + PADDING;
+         
+         const dx = ay - cy; // Perpendicular vector (simplified)
+         const dy = -(ax - cx); 
+         const len = Math.hypot(dx, dy) || 1;
+         
+         cx += (dx/len) * PIT_OFFSET;
+         cy += (dy/len) * PIT_OFFSET;
       }
 
+      // Smoothing
       const prev = lastXYRef.current[driver.driverCode];
-      let x = tx;
-      let y = ty;
-
-      if (prev) {
-        const dx = tx - prev.x;
-        const dy = ty - prev.y;
-        const dist = Math.hypot(dx, dy);
-
-        const MAX_SMOOTH_DISTANCE = 200;
-
-        if (dist < MAX_SMOOTH_DISTANCE) {
-          x = prev.x + dx * SMOOTHING;
-          y = prev.y + dy * SMOOTHING;
-        }
+      if (prev && Math.hypot(cx - prev.x, cy - prev.y) < 200) {
+          cx = prev.x + (cx - prev.x) * SMOOTHING;
+          cy = prev.y + (cy - prev.y) * SMOOTHING;
       }
+      lastXYRef.current[driver.driverCode] = { x: cx, y: cy };
 
-      lastXYRef.current[driver.driverCode] = { x, y };
+      const isSelected = selectedDriver === driver.driverCode;
 
-      // PIT visual style
-      const inPit = isInPit(driver, raceTime);
-      ctx.globalAlpha = inPit ? PIT_ALPHA : 1.0;
-
-      // Car dot
-      ctx.fillStyle = driver.teamColor;
-      ctx.beginPath();
-      ctx.arc(x, y, 5, 0, Math.PI * 2);
-      ctx.fill();
+      // Draw Car
+      ctxCar.fillStyle = driver.teamColor;
+      ctxCar.globalAlpha = activePit ? PIT_ALPHA : (selectedDriver && !isSelected ? 0.3 : 1.0);
+      
+      ctxCar.beginPath();
+      const radius = isSelected ? 8 : 5;
+      ctxCar.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctxCar.fill();
+      
+      if (isSelected) {
+          ctxCar.strokeStyle = "#fff";
+          ctxCar.lineWidth = 2;
+          ctxCar.stroke();
+          
+          ctxCar.beginPath();
+          ctxCar.strokeStyle = "#00d2be"; 
+          ctxCar.lineWidth = 2;
+          ctxCar.arc(cx, cy, radius + 4, 0, Math.PI * 2);
+          ctxCar.stroke();
+      }
 
       // Label
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "11px sans-serif";
-      ctx.fillText(driver.driverCode, x + 7, y + 4);
-
-      // PIT badge next to car
-      if (inPit) {
-        ctx.fillStyle = "#cc0000";
-        ctx.font = "bold 9px sans-serif";
-        ctx.fillText("PIT", x + 7, y + 14);
+      if (currentCam.current.zoom > 1.5 || isSelected) {
+          ctxCar.fillStyle = "#fff";
+          ctxCar.font = "11px sans-serif";
+          ctxCar.fillText(driver.driverCode, cx + 10, cy + 4);
       }
-
-      ctx.globalAlpha = 1.0;
+      
+      ctxCar.globalAlpha = 1.0;
     });
-  }, [raceTime, raceData, track, dimensions]);
+
+    ctxTrack.restore();
+    ctxCar.restore();
+
+  }, [raceTime, raceData, track, dimensions, selectedDriver]);
+
+  /* =========================
+     CLICK HANDLER
+  ========================== */
+  const handleCanvasClick = (e: React.MouseEvent) => {
+      if (!trackCanvas.current || !onDriverSelect) return;
+      const rect = trackCanvas.current.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      const clickY = e.clientY - rect.top;
+
+      const cx = dimensions.width / 2;
+      const cy = dimensions.height / 2;
+      const zoom = currentCam.current.zoom;
+      const tx = currentCam.current.x;
+      const ty = currentCam.current.y;
+
+      const worldX = (clickX - cx) / zoom + tx;
+      const worldY = (clickY - cy) / zoom + ty;
+
+      let bestDist = 20 / zoom; 
+      let bestDriver = null;
+
+      Object.entries(lastXYRef.current).forEach(([code, pos]) => {
+          const dist = Math.hypot(pos.x - worldX, pos.y - worldY);
+          if (dist < bestDist) {
+              bestDist = dist;
+              bestDriver = code;
+          }
+      });
+
+      if (bestDriver) {
+          onDriverSelect(bestDriver);
+      } else {
+          onDriverSelect(""); 
+      }
+  };
 
   return (
-    <div ref={containerRef} style={{ position: "relative", width: "100%", height: "100%", background: "#111" }}>
+    <div ref={containerRef} style={{ position: "relative", width: "100%", height: "100%", background: "#111" }} onClick={handleCanvasClick}>
       <canvas ref={trackCanvas} style={{ position: "absolute", top: 0, left: 0 }} />
       <canvas ref={carCanvas} style={{ position: "absolute", top: 0, left: 0 }} />
     </div>

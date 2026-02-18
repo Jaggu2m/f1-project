@@ -6,6 +6,19 @@ type PositionPoint = {
   lap: number;
 };
 
+/* ---- TELEMETRY TYPES ---- */
+export type TelemetryPoint = {
+  t: number;
+  speed: number;
+  rpm: number;
+  gear: number;
+  throttle: number;
+  brake: number;
+  drs: number;
+  x: number;
+  y: number;
+};
+
 type PitStop = {
   lap: number;
   enter: number;
@@ -26,6 +39,7 @@ type DriverData = {
   team: string;
   teamColor: string;
   positions: PositionPoint[];
+  telemetry?: TelemetryPoint[]; // Added Telemetry
   pitStops?: PitStop[];
   laps?: LapData[]; 
   bestSectors?: {
@@ -59,6 +73,7 @@ export type DriverState = {
   inPit: boolean;
   compound?: "SOFT" | "MEDIUM" | "HARD" | string;
   positionChange?: number;
+  telemetry?: TelemetryPoint; // Interpolated Telemetry State
 };
 
 /* =========================
@@ -84,6 +99,61 @@ function interpolate(points: PositionPoint[], raceTime: number) {
     t: raceTime,
     lap: p0.lap,
     s: p0.s + ratio * (p1.s - p0.s),
+  };
+}
+
+/* =========================
+   INTERPOLATE TELEMETRY
+   (Binary Search + Linear Interpolation)
+========================= */
+function interpolateTelemetry(points: TelemetryPoint[], raceTime: number): TelemetryPoint | null {
+  if (!points || !points.length) return null;
+
+  // Global bounds check
+  if (raceTime <= points[0].t) return points[0];
+  if (raceTime >= points[points.length - 1].t) return points[points.length - 1];
+
+  // Binary Search
+  let low = 0;
+  let high = points.length - 1;
+
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    if (points[mid].t < raceTime) {
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  // low is now the index of the first point > raceTime
+  // so we want to interpolate between low-1 and low
+  const i = low;
+  if (i <= 0) return points[0];
+  if (i >= points.length) return points[points.length - 1];
+
+  const p0 = points[i - 1];
+  const p1 = points[i];
+
+  // Time delta
+  const dt = p1.t - p0.t;
+  if (dt <= 0) return p0;
+
+  const ratio = (raceTime - p0.t) / dt;
+
+  // Helper for linear interp
+  const lerp = (a: number, b: number) => a + (b - a) * ratio;
+
+  return {
+    t: raceTime,
+    speed: lerp(p0.speed, p1.speed),
+    rpm: lerp(p0.rpm, p1.rpm),
+    gear: ratio < 0.5 ? p0.gear : p1.gear, // Discrete value
+    throttle: lerp(p0.throttle, p1.throttle),
+    brake: lerp(p0.brake, p1.brake),
+    drs: ratio < 0.5 ? p0.drs : p1.drs,     // Discrete value
+    x: lerp(p0.x, p1.x),
+    y: lerp(p0.y, p1.y),
   };
 }
 
@@ -153,6 +223,9 @@ export function useRaceState(
 
       const interp = interpolate(driver.positions, raceTime);
       if (!interp) return;
+      
+      // Interpolate Telemetry
+      const tel = driver.telemetry ? interpolateTelemetry(driver.telemetry, raceTime) : undefined;
 
       const inPit = driver.pitStops?.some(
         (pit) => raceTime >= pit.enter && raceTime <= pit.exit
@@ -162,20 +235,12 @@ export function useRaceState(
       const derivedLap = Math.max(1, Math.floor(interp.s / trackLen) + 1);
       
       // GRID SYNTHESIS:
-      // If at start (raceTime ~ 0), force drivers into grid formation behind start line
-      // to fix visual clumping and leaderboard randomness.
       let displayS = interp.s;
       
-      // Check if we are effectively at the start (e.g. first 2 seconds or raw s is effectively 0/start-offset)
-      // The data showed clumps at 918, 735 etc. which is weird, but let's trust raceTime 0.
       if (raceTime < 1.0) {
         const gridIndex = GRID_ORDER.indexOf(driver.driverCode);
         if (gridIndex !== -1) {
-           // Place them behind start line (trackLen). 
-           // P1 at Line, P2 -8m, etc.
-           // s is cumulative, so s at start line is 0 (or trackLen if wrapping? usually 0 is start).
-           // If 0 is start, then behind is trackLen - offset.
-           displayS = trackLen - (gridIndex * 16); // 16m spacing (generous gap)
+           displayS = trackLen - (gridIndex * 16); // 16m spacing
         }
       }
 
@@ -195,6 +260,7 @@ export function useRaceState(
         inPit,
         compound,
         positionChange: 0, 
+        telemetry: tel || undefined
       });
     });
 
@@ -219,8 +285,6 @@ export function useRaceState(
       const diff = ((b as any)._distanceTraveled || 0) - ((a as any)._distanceTraveled || 0);
       
       // Tiebreaker: Use starting grid position (firstS)
-      // This ensures that at the start (when distanceTraveled is 0 for all), 
-      // the cars are ordered by their grid position (higher s = further ahead on grid).
       if (Math.abs(diff) < 0.5) {
         const firstSA = firstSMap[a.driverCode] ?? 0;
         const firstSB = firstSMap[b.driverCode] ?? 0;
@@ -266,16 +330,8 @@ export function useRaceState(
       }
 
       // 3. Position Change
-      // Compare current index with previous index from ref
-      // Note: This logic works frame-to-frame. 
-      // If we want change since "start", we'd need fixed starting grid.
-      // But typically "positionChange" implies change since start or prev lap.
-      // The user prompted "calculate positionChange", and the component has logic "prevOrderRef".
-      // Let's implement frame-to-frame change here for correctness of the hook spec.
       const prevIndex = prevOrderRef.current.indexOf(driverState.driverCode);
       if (prevIndex !== -1) {
-        // e.g. was 0 (leader), now 1 (2nd). change = 0 - 1 = -1 (down)
-        // e.g. was 5, now 2. change = 5 - 2 = +3 (up)
         driverState.positionChange = prevIndex - index;
       } else {
         driverState.positionChange = 0;

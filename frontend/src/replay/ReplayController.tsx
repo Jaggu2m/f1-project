@@ -2,8 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import RaceRenderer from "../engine/RaceRenderer";
 import { useRaceState, RaceData } from "../engine/useRaceState";
 import RaceLeaderboard from "../components/RaceLeaderboard";
-
-
+import TelemetryPanel from "../components/TelemetryPanel";
 
 export default function ReplayController() {
   const [raceData, setRaceData] = useState<RaceData | null>(null);
@@ -11,6 +10,7 @@ export default function ReplayController() {
   const [maxTime, setMaxTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
+  const [selectedDriver, setSelectedDriver] = useState<string | null>(null);
 
   const rafRef = useRef<number | null>(null);
   const lastFrameRef = useRef<number | null>(null);
@@ -83,9 +83,11 @@ export default function ReplayController() {
 
   const raceState = useRaceState(raceData, raceTime);
 
-  /* =========================
-     RENDER
-  ========================== */
+  // Find selected driver state
+  const activeDriverState = selectedDriver 
+    ? raceState.find(d => d.driverCode === selectedDriver) 
+    : null;
+
   /* =========================
      RENDER
   ========================== */
@@ -117,11 +119,26 @@ export default function ReplayController() {
 
         {raceData && (
           <>
-            <RaceRenderer raceTime={raceTime} raceData={raceData} />
+            <RaceRenderer 
+              raceTime={raceTime} 
+              raceData={raceData} 
+              selectedDriver={selectedDriver}
+              onDriverSelect={(code) => setSelectedDriver(code === selectedDriver ? null : code)}
+            />
+            
+            {/* Leaderboard */}
             <RaceLeaderboard 
               drivers={raceState} 
               totalLaps={Math.max(...Object.values(raceData.drivers).flatMap(d => d.laps?.map(l => l.lap) || [0]))} 
             />
+
+            {/* 📊 TELEMETRY PANEL */}
+            {activeDriverState && (
+              <TelemetryPanel 
+                driver={activeDriverState} 
+                raceTime={raceTime} 
+              />
+            )}
           </>
         )}
       </div>
