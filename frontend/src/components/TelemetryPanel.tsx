@@ -1,9 +1,11 @@
 import React, { useMemo } from "react";
 import { DriverState } from "../engine/useRaceState";
+import { motion } from "framer-motion";
 
 type Props = {
   driver: DriverState;
   raceTime: number;
+  align?: "left" | "right" | "center";
 };
 
 // Start/End angles for gauges (in degrees)
@@ -31,7 +33,7 @@ const describeArc = (x: number, y: number, radius: number, startAngle: number, e
   ].join(" ");
 };
 
-export default function TelemetryPanel({ driver, raceTime }: Props) {
+export default function TelemetryPanel({ driver, raceTime, align = "center" }: Props) {
   const tel = driver.telemetry;
 
   // Safe defaults
@@ -58,28 +60,36 @@ export default function TelemetryPanel({ driver, raceTime }: Props) {
   const rpmFillPath = describeArc(100, 80, 70, RPM_START, rpmAngle);
 
   return (
-    <div style={{
-      position: "fixed",
+    <motion.div 
+      drag
+      dragMomentum={false}
+      style={{
+      position: "absolute", // Use absolute to align strictly to the left/right of its dynamic flex parent, or fixed if global
       bottom: 20,
-      left: "50%",
-      transform: "translateX(-50%)",
-      width: "90%",
-      maxWidth: 1000,
+      left: align === "left" ? 20 : align === "right" ? "auto" : "50%",
+      right: align === "right" ? 20 : "auto",
+      transform: align === "center" ? "translateX(-50%)" : "none",
+      width: align === "center" ? "90%" : "48vw",
+      maxWidth: align === "center" ? 1000 : 800,
       height: 220,
       background: "rgba(10, 20, 40, 0.95)",
-      border: "2px solid #1f3a5a",
+      border: "none",
       borderRadius: 12,
       boxShadow: "0 0 30px rgba(0,0,0,0.8)",
       display: "flex",
       fontFamily: "'Orbitron', sans-serif", // Ideally load this font
       color: "#fff",
       overflow: "hidden",
-      gap: 4
+      gap: 4,
+      zIndex: 100,
+      cursor: "grab"
     }}>
       
       {/* --- COLUMN 1: PRIMARY TELEMETRY (Speed, Throttle, Brake) --- */}
       <div style={{ flex: 1, borderRight: "1px solid #1f3a5a", padding: 15, display: "flex", flexDirection: "column" }}>
-        <h3 style={{ margin: "0 0 10px 0", fontSize: 12, color: "#8ab4f8", letterSpacing: 1 }}>PRIMARY TELEMETRY</h3>
+        <h3 style={{ margin: "0 0 10px 0", fontSize: 13, color: driver.teamColor || "#8ab4f8", letterSpacing: 1, display: "flex", justifyContent: "space-between" }}>
+            <span>{driver.driverCode} TELEMETRY</span>
+        </h3>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-around", flex: 1 }}>
           
           {/* SPEED GAUGE */}
@@ -131,7 +141,7 @@ export default function TelemetryPanel({ driver, raceTime }: Props) {
         <div style={{ position: "relative", flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
             
             {/* RPM GAUGE */}
-            <svg width="200" height="150" viewBox="0 0 200 150">
+            <svg width="200" height="170" viewBox="0 0 200 170">
                {/* Gradients */}
                <defs>
                  <linearGradient id="rpmGrad" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -199,6 +209,6 @@ export default function TelemetryPanel({ driver, raceTime }: Props) {
           </div>
       </div>
 
-    </div>
+    </motion.div>
   );
 }

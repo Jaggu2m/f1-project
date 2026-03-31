@@ -27,6 +27,9 @@ type DriverData = {
 };
 
 type RaceData = {
+  eventName?: string;
+  season?: number;
+  round?: number;
   track: { points: RawTrackPoint[]; length?: number };
   drivers: Record<string, DriverData>;
 };
@@ -60,6 +63,51 @@ const SMOOTHING = 0.15;  // Lower = smoother/floatier, higher = snappier (0-1).
 ========================= */
 const rotate = (x: number, y: number) => ({ x: y, y: -x });
 
+/* Compute optimal rotation angle that maximizes canvas fill */
+function computeOptimalRotation(rawPoints: {x: number; y: number}[], canvasW: number, canvasH: number): number {
+  const canvasAspect = canvasW / canvasH;
+  let bestAngle = 0;
+  let bestFill = 0;
+
+  for (let deg = 0; deg < 180; deg += 5) {
+    const rad = (deg * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const p of rawPoints) {
+      const rx = p.x * cos - p.y * sin;
+      const ry = p.x * sin + p.y * cos;
+      if (rx < minX) minX = rx;
+      if (rx > maxX) maxX = rx;
+      if (ry < minY) minY = ry;
+      if (ry > maxY) maxY = ry;
+    }
+    const w = maxX - minX || 1;
+    const h = maxY - minY || 1;
+    const trackAspect = w / h;
+    // Scale to fit canvas
+    const scale = trackAspect > canvasAspect
+      ? (canvasW - PADDING * 2) / w
+      : (canvasH - PADDING * 2) / h;
+    const fillW = (w * scale) / canvasW;
+    const fillH = (h * scale) / canvasH;
+    const fill = fillW * fillH; // area fraction
+    if (fill > bestFill) {
+      bestFill = fill;
+      bestAngle = deg;
+    }
+  }
+  return bestAngle;
+}
+
+function rotatePoint(x: number, y: number, angleDeg: number): { x: number; y: number } {
+  const rad = (angleDeg * Math.PI) / 180;
+  return {
+    x: x * Math.cos(rad) - y * Math.sin(rad),
+    y: x * Math.sin(rad) + y * Math.cos(rad),
+  };
+}
+
 function buildTrack(points: RawTrackPoint[]): TrackPoint[] {
   let s = 0;
   return points.map((p, i) => {
@@ -89,7 +137,7 @@ function positionFromS(s: number, track: TrackPoint[]) {
 }
 
 function interpolateLapS(points: PositionPoint[], t: number) {
-  if (!points.length) return null;
+  if (!points || !points.length) return null;
 
   if (t <= points[0].t) return points[0];
   if (t >= points[points.length - 1].t)
@@ -123,7 +171,7 @@ export default function RaceRenderer({ raceTime, raceData, selectedDriver, onDri
   const carCanvas = useRef<HTMLCanvasElement>(null);
 
   const [track, setTrack] = useState<TrackPoint[]>([]);
-  const normRef = useRef<Normalization | null>(null);
+  const normRef = useRef<Normalization & { angle: number } | null>(null);
   const lastXYRef = useRef<Record<string, { x: number; y: number }>>({});
   
   /* ---- CAMERA STATE ---- */
@@ -154,8 +202,16 @@ export default function RaceRenderer({ raceTime, raceData, selectedDriver, onDri
   useEffect(() => {
     if (raceData?.track?.points) {
       setTrack(buildTrack(raceData.track.points));
+      normRef.current = null;
     }
   }, [raceData]);
+
+  // Reset normalization when container size changes so track re-fits
+  useEffect(() => {
+    if (dimensions.width > 0) {
+      normRef.current = null;
+    }
+  }, [dimensions.width, dimensions.height]);
 
   /* =========================
      CAMERA LERP LOGIC
@@ -212,9 +268,11 @@ export default function RaceRenderer({ raceTime, raceData, selectedDriver, onDri
     carCanvas.current.width = dimensions.width;
     carCanvas.current.height = dimensions.height;
 
-    // --- 1. Compute Base Normalization (Fit to Screen) ---
-    if (!normRef.current) { 
-        const rotated = track.map(p => rotate(p.x, p.y));
+    // --- 1. Compute Optimal Normalization (Fit to Screen) ---
+    if (!normRef.current || normRef.current.scale === 0) {
+        const rawPts = raceData.track.points;
+        const optAngle = computeOptimalRotation(rawPts, dimensions.width, dimensions.height);
+        const rotated = rawPts.map(p => rotatePoint(p.x, p.y, optAngle));
         let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
         rotated.forEach(p => {
             minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
@@ -224,9 +282,15 @@ export default function RaceRenderer({ raceTime, raceData, selectedDriver, onDri
             (dimensions.width - PADDING * 2) / (maxX - minX),
             (dimensions.height - PADDING * 2) / (maxY - minY)
         );
-        normRef.current = { minX, minY, scale };
+        // Center offset
+        const trackW = (maxX - minX) * scale;
+        const trackH = (maxY - minY) * scale;
+        const offsetX = (dimensions.width - trackW) / 2 - minX * scale;
+        const offsetY = (dimensions.height - trackH) / 2 - minY * scale;
+        normRef.current = { minX: -offsetX / scale, minY: -offsetY / scale, scale, angle: optAngle };
     }
     const { minX, minY, scale } = normRef.current;
+    const optAngle = normRef.current.angle;
 
     // --- 2. Apply Camera Transform ---
     const cx = dimensions.width / 2;
@@ -243,8 +307,7 @@ export default function RaceRenderer({ raceTime, raceData, selectedDriver, onDri
     });
 
     // --- 3. Draw Track ---
-    // (Simplified drawing for performance)
-    const rotated = track.map(p => rotate(p.x, p.y));
+    const rotated = track.map(p => rotatePoint(p.x, p.y, optAngle));
     const trackWidthPx = 200 * scale; 
     
     ctxTrack.lineCap = "round";
@@ -255,8 +318,8 @@ export default function RaceRenderer({ raceTime, raceData, selectedDriver, onDri
     ctxTrack.strokeStyle = "#444";
     ctxTrack.lineWidth = trackWidthPx;
     rotated.forEach((p, i) => {
-        const tpx = (p.x - minX) * scale + PADDING;
-        const tpy = (p.y - minY) * scale + PADDING;
+        const tpx = (p.x - minX) * scale;
+        const tpy = (p.y - minY) * scale;
         if(i===0) ctxTrack.moveTo(tpx, tpy);
         else ctxTrack.lineTo(tpx, tpy);
     });
@@ -270,8 +333,8 @@ export default function RaceRenderer({ raceTime, raceData, selectedDriver, onDri
     // Start/Finish Line (Approx)
     if (rotated.length > 0) {
         const p0 = rotated[0];
-        const tpx = (p0.x - minX) * scale + PADDING;
-        const tpy = (p0.y - minY) * scale + PADDING;
+        const tpx = (p0.x - minX) * scale;
+        const tpy = (p0.y - minY) * scale;
         ctxTrack.beginPath();
         ctxTrack.fillStyle = "#fff";
         ctxTrack.arc(tpx, tpy, trackWidthPx/2, 0, Math.PI*2);
@@ -285,10 +348,10 @@ export default function RaceRenderer({ raceTime, raceData, selectedDriver, onDri
 
       const raceS = interp.s * 10; // Must apply 10X natively for visual snapping
       const basePos = positionFromS(raceS, track);
-      const r = rotate(basePos.x, basePos.y);
+      const r = rotatePoint(basePos.x, basePos.y, optAngle);
 
-      let cx = (r.x - minX) * scale + PADDING;
-      let cy = (r.y - minY) * scale + PADDING;
+      let cx = (r.x - minX) * scale;
+      let cy = (r.y - minY) * scale;
 
       // Pit offset logic 
       const activePit = driver.pitStops?.find(p => raceTime >= p.enter && raceTime <= p.exit);
@@ -393,6 +456,30 @@ export default function RaceRenderer({ raceTime, raceData, selectedDriver, onDri
     <div ref={containerRef} style={{ position: "relative", width: "100%", height: "100%", background: "#111" }} onClick={handleCanvasClick}>
       <canvas ref={trackCanvas} style={{ position: "absolute", top: 0, left: 0 }} />
       <canvas ref={carCanvas} style={{ position: "absolute", top: 0, left: 0 }} />
+      
+      {/* Race Info Overlay */}
+      {raceData.eventName && (
+        <div style={{
+          position: "absolute",
+          top: 20,
+          left: 20,
+          zIndex: 10,
+          pointerEvents: "none"
+        }}>
+          <div style={{
+            fontSize: 28,
+            fontWeight: "bold",
+            color: "#fff",
+            textShadow: "0 2px 12px rgba(0,0,0,0.8)",
+            letterSpacing: 1
+          }}>
+            {raceData.eventName}
+          </div>
+          <div style={{ fontSize: 14, color: "#888", marginTop: 4, letterSpacing: 2, textTransform: "uppercase" }}>
+            {raceData.season} Season — Round {raceData.round}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

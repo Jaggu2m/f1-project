@@ -234,16 +234,38 @@ def _process_track_geometry(fastest_lap):
     return {"length": s_acc, "points": points}
 
 def _process_drivers(session):
+    TEAM_COLORS_FALLBACK = {
+        "Red Bull Racing": "#3671C6",
+        "Ferrari": "#E8002D",
+        "Mercedes": "#27F4D2",
+        "McLaren": "#FF8000",
+        "Aston Martin": "#229971",
+        "Alpine": "#0093CC",
+        "Williams": "#64C4FF",
+        "Alfa Romeo": "#C92D4B",
+        "AlphaTauri": "#5E8FAA",
+        "Haas F1 Team": "#B6BABD",
+        "Kick Sauber": "#52E252",
+        "Visa Cash App RB": "#6692FF",
+        "Racing Bulls": "#6692FF"
+    }
+
     drivers = []
     for d in session.drivers:
         meta = session.get_driver(d)
-        # 2023 colors hardcoded or fetched? FastF1 has team colors now usually
-        # Fallback map
-        # ...
+        team_name = meta["TeamName"]
+        
+        # FastF1 provides TeamColor as hex WITHOUT '#' prefix
+        raw_color = meta.get("TeamColor", "")
+        if raw_color and len(raw_color) >= 6:
+            color = f"#{raw_color}"
+        else:
+            color = TEAM_COLORS_FALLBACK.get(team_name, "#888888")
+
         drivers.append({
             "code": meta["Abbreviation"],
-            "team": meta["TeamName"],
-            "color": "#FFFFFF", # Placeholder
+            "team": team_name,
+            "color": color,
             "grid": meta["GridPosition"]
         })
     return drivers

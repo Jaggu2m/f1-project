@@ -4,10 +4,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.core.database import get_db
 import json
+import fastf1
+import asyncio
 from app.models import Race, Driver, TrackPoint
 from app.services.ingestion import ingest_race
 
 router = APIRouter()
+
+@router.get("/schedule/{season}")
+async def get_schedule(season: int):
+    """Return the race calendar for a given season."""
+    try:
+        loop = asyncio.get_event_loop()
+        schedule = await loop.run_in_executor(None, fastf1.get_event_schedule, season)
+        races = []
+        for _, row in schedule.iterrows():
+            rn = int(row["RoundNumber"])
+            if rn == 0:
+                continue  # Skip pre-season testing
+            races.append({
+                "round": rn,
+                "name": row["EventName"]
+            })
+        return {"season": season, "races": races}
+    except Exception as e:
+        return {"season": season, "races": [], "error": str(e)}
 
 @router.get("/{season}/{round}")
 async def get_race(season: int, round: int, bg: BackgroundTasks, db: AsyncSession = Depends(get_db)):
@@ -155,7 +176,21 @@ async def get_all_race_data(season: int, round: int, bg: BackgroundTasks, db: As
             "pitStops": pit_map.get(d.id, [])
         }
     
+    # Fetch event name from FastF1 schedule
+    event_name = ""
+    try:
+        loop = asyncio.get_event_loop()
+        schedule = await loop.run_in_executor(None, fastf1.get_event_schedule, season)
+        event_row = schedule[schedule["RoundNumber"] == round]
+        if not event_row.empty:
+            event_name = str(event_row.iloc[0]["EventName"])
+    except:
+        pass
+
     data = {
+        "eventName": event_name,
+        "season": season,
+        "round": round,
         "track": {"points": track_points, "length": race.track_length},
         "drivers": drivers_dict
     }

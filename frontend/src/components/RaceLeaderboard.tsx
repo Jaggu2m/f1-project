@@ -4,11 +4,13 @@ import { useRef, useEffect, useState } from "react";
 type Props = {
   drivers: any[];
   totalLaps: number;
-  selectedDriver?: string | null;
+  selectedDrivers?: string[];
   onDriverSelect?: (driverCode: string) => void;
+  isOpen: boolean;
+  onToggle: () => void;
 };
 
-export default function RaceLeaderboard({ drivers, totalLaps, selectedDriver, onDriverSelect }: Props) {
+export default function RaceLeaderboard({ drivers, totalLaps, selectedDrivers = [], onDriverSelect, isOpen, onToggle }: Props) {
   const [committedOrder, setCommittedOrder] = useState<string[]>([]);
   const [overtakeMap, setOvertakeMap] = useState<Record<string, number>>({});
   
@@ -81,21 +83,23 @@ export default function RaceLeaderboard({ drivers, totalLaps, selectedDriver, on
   return (
     <div
       style={{
-        position: "absolute",
-        top: 20,
-        right: 20,
-        width: 420,
+        width: isOpen ? 420 : 200,
+        flexShrink: 0,
         display: "flex",
         flexDirection: "column",
         gap: 6,
         color: "white",
         fontSize: 14,
         fontFamily: "sans-serif",
-        zIndex: 50
+        padding: "20px 20px 20px 0",
+        overflowY: "auto",
+        transition: "width 0.3s ease"
       }}
     >
       {/* HEADER */}
       <div
+        onClick={onToggle}
+        title={isOpen ? "Click to minimize Leaderboard" : "Click to expand Leaderboard"}
         style={{
           background: "#e10600",
           padding: "12px 20px",
@@ -103,20 +107,27 @@ export default function RaceLeaderboard({ drivers, totalLaps, selectedDriver, on
           fontWeight: "bold",
           fontSize: 22,
           textAlign: "center",
-          marginBottom: 10
+          marginBottom: 10,
+          cursor: "pointer",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center"
         }}
       >
-        LAP {currentLap}{" "}
-        <span style={{ opacity: 0.6, fontSize: 14 }}>
-          / {totalLaps}
+        <span>
+            LAP {currentLap}{" "}
+            <span style={{ opacity: 0.6, fontSize: 14 }}>
+              / {totalLaps}
+            </span>
         </span>
+        <span style={{ fontSize: 16 }}>{isOpen ? "▼" : "▲"}</span>
       </div>
 
       <AnimatePresence>
-        {displayDrivers.map((d, i) => {
+        {isOpen && displayDrivers.map((d, i) => {
           const isLeader = i === 0;
           const isBattle = d.interval > 0 && d.interval < 1;
-          const isSelected = d.driverCode === selectedDriver;
+          const isSelected = selectedDrivers.includes(d.driverCode);
 
           // Pull from the frozen 1000ms Overtake map
           const positionChange = overtakeMap[d.driverCode] || 0;
@@ -165,12 +176,12 @@ export default function RaceLeaderboard({ drivers, totalLaps, selectedDriver, on
                 <span style={{ fontSize: 12, minWidth: 20, textAlign: "center" }}>
                   {positionChange > 0 && (
                     <span style={{ color: "#00ff00", fontWeight: "bold" }}>
-                      ▲{positionChange}
+                      ▲
                     </span>
                   )}
                   {positionChange < 0 && (
                     <span style={{ color: "#ff3c3c", fontWeight: "bold" }}>
-                      ▼{Math.abs(positionChange)}
+                      ▼
                     </span>
                   )}
                 </span>

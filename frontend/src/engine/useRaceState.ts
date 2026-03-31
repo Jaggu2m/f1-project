@@ -51,6 +51,9 @@ type DriverData = {
 };
 
 export type RaceData = {
+  eventName?: string;
+  season?: number;
+  round?: number;
   track: { 
     points: { x: number; y: number }[];
     length?: number; 

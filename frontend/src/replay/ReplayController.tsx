@@ -10,7 +10,31 @@ export default function ReplayController({ season = 2023, round = 10, onBack }: 
   const [maxTime, setMaxTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
-  const [selectedDriver, setSelectedDriver] = useState<string | null>(null);
+  const [selectedDrivers, setSelectedDrivers] = useState<string[]>([]);
+  const [compareMode, setCompareMode] = useState(false);
+  const [splitScreen, setSplitScreen] = useState(false);
+  const [leaderboardOpen, setLeaderboardOpen] = useState(true);
+
+  const toggleDriver = (code: string) => {
+    setSelectedDrivers(prev => {
+       if (compareMode) {
+           if (prev.includes(code)) return prev.filter(c => c !== code); // Deselect
+           if (prev.length >= 2) return [prev[1], code]; // Keep latest two
+           return [...prev, code];
+       } else {
+           if (prev.includes(code)) return []; // Deselect if already selected
+           return [code]; // Single select
+       }
+    });
+  };
+
+  // Clean up selection if compare mode disabled
+  useEffect(() => {
+     if (!compareMode && selectedDrivers.length > 1) {
+         setSelectedDrivers([selectedDrivers[0]]);
+         setSplitScreen(false);
+     }
+  }, [compareMode, selectedDrivers]);
 
   const rafRef = useRef<number | null>(null);
   const lastFrameRef = useRef<number | null>(null);
@@ -60,34 +84,35 @@ export default function ReplayController({ season = 2023, round = 10, onBack }: 
   }, [season, round]);
 
   /* =========================
-     LAZY LOAD TELEMETRY
+     LAZY LOAD TELEMETRY (MULTI-DRIVER)
   ========================== */
   useEffect(() => {
-    if (!selectedDriver || !raceData) return;
-    if (raceData.drivers[selectedDriver]?.telemetry) return; // already loaded
+    if (selectedDrivers.length === 0 || !raceData) return;
 
-    fetch(`http://127.0.0.1:8000/race/${season}/${round}/telemetry/${selectedDriver}`)
-      .then(res => res.json())
-      .then(telData => {
-         // Some drivers might fail to load data, protect against it
-         if (telData.error) return;
+    selectedDrivers.forEach(driverCode => {
+       if (raceData.drivers[driverCode]?.telemetry) return; // already loaded
 
-         setRaceData(prev => {
-            if (!prev) return prev;
-            return {
-               ...prev,
-               drivers: {
-                 ...prev.drivers,
-                 [selectedDriver]: {
-                    ...prev.drivers[selectedDriver],
-                    telemetry: telData
-                 }
-               }
-            };
-         });
-      })
-      .catch(err => console.error("Telemetry fetch error", err));
-  }, [selectedDriver, raceData, season, round]);
+       fetch(`http://127.0.0.1:8000/race/${season}/${round}/telemetry/${driverCode}`)
+         .then(res => res.json())
+         .then(telData => {
+            if (telData.error) return;
+            setRaceData(prev => {
+               if (!prev) return prev;
+               return {
+                  ...prev,
+                  drivers: {
+                    ...prev.drivers,
+                    [driverCode]: {
+                       ...prev.drivers[driverCode],
+                       telemetry: telData
+                    }
+                  }
+               };
+            });
+         })
+         .catch(err => console.error("Telemetry fetch error", err));
+    });
+  }, [selectedDrivers, raceData, season, round]);
 
   /* =========================
      TIME ENGINE
@@ -129,10 +154,8 @@ export default function ReplayController({ season = 2023, round = 10, onBack }: 
 
   const raceState = useRaceState(raceData, raceTime);
 
-  // Find selected driver state
-  const activeDriverState = selectedDriver 
-    ? raceState.find(d => d.driverCode === selectedDriver) 
-    : null;
+  // Find selected driver states based on the array
+  const activeDriverStates = raceState.filter(d => selectedDrivers.includes(d.driverCode));
 
   /* =========================
      RENDER
@@ -151,7 +174,7 @@ export default function ReplayController({ season = 2023, round = 10, onBack }: 
       fontFamily: "sans-serif"
     }}>
       {/* 🏎️ Main Viewport */}
-      <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
+      <div style={{ flex: 1, position: "relative", overflow: "hidden", display: "flex" }}>
         {/* Loading / Error Feedback */}
         {!raceData && (
           <div style={{ 
@@ -165,27 +188,48 @@ export default function ReplayController({ season = 2023, round = 10, onBack }: 
 
         {raceData && (
           <>
-            <RaceRenderer 
-              raceTime={raceTime} 
-              raceData={raceData} 
-              selectedDriver={selectedDriver}
-              onDriverSelect={(code) => setSelectedDriver(code === selectedDriver ? null : code)}
-            />
+            {/* SPLIT SCREEN MAGIC */}
+            {splitScreen && selectedDrivers.length === 2 ? (
+               <div style={{ display: 'flex', width: '100%', height: '100%', flex: 1 }}>
+                  <div style={{ flex: 1, position: 'relative', borderRight: '2px solid #333' }}>
+                      <RaceRenderer raceTime={raceTime} raceData={raceData} selectedDriver={selectedDrivers[0]} onDriverSelect={toggleDriver} />
+                  </div>
+                  <div style={{ flex: 1, position: 'relative' }}>
+                      <RaceRenderer raceTime={raceTime} raceData={raceData} selectedDriver={selectedDrivers[1]} onDriverSelect={toggleDriver} />
+                  </div>
+               </div>
+            ) : (
+               <div style={{ flex: 1, position: 'relative' }}>
+                 <RaceRenderer 
+                   raceTime={raceTime} 
+                   raceData={raceData} 
+                   selectedDriver={selectedDrivers[0] || null}
+                   onDriverSelect={toggleDriver}
+                 />
+               </div>
+            )}
             
-            {/* Leaderboard */}
-            <RaceLeaderboard 
-              drivers={raceState} 
-              totalLaps={Math.max(...Object.values(raceData.drivers).flatMap(d => d.laps?.map(l => l.lap) || [0]))} 
-              selectedDriver={selectedDriver}
-              onDriverSelect={(code) => setSelectedDriver(code === selectedDriver ? null : code)}
-            />
+            {/* Leaderboard hides when Split-Screen is active */}
+            {!(splitScreen && selectedDrivers.length === 2) && (
+                <RaceLeaderboard 
+                  drivers={raceState} 
+                  totalLaps={Math.max(...Object.values(raceData.drivers).flatMap(d => d.laps?.map(l => l.lap) || [0]))} 
+                  selectedDrivers={selectedDrivers}
+                  onDriverSelect={toggleDriver}
+                  isOpen={leaderboardOpen}
+                  onToggle={() => setLeaderboardOpen(!leaderboardOpen)}
+                />
+            )}
 
-            {/* 📊 TELEMETRY PANEL */}
-            {activeDriverState && (
-              <TelemetryPanel 
-                driver={activeDriverState} 
-                raceTime={raceTime} 
-              />
+            {/* 📊 TELEMETRY PANELS */}
+            {activeDriverStates.length === 1 && (
+              <TelemetryPanel driver={activeDriverStates[0]} raceTime={raceTime} align="center" />
+            )}
+            {activeDriverStates.length === 2 && (
+              <>
+                 <TelemetryPanel driver={activeDriverStates[0]} raceTime={raceTime} align="left" />
+                 <TelemetryPanel driver={activeDriverStates[1]} raceTime={raceTime} align="right" />
+              </>
             )}
           </>
         )}
@@ -259,6 +303,37 @@ export default function ReplayController({ season = 2023, round = 10, onBack }: 
               {s}x
             </button>
           ))}
+        </div>
+
+        {/* View Layout Controls */}
+        <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
+           <button 
+             onClick={() => {
+                setCompareMode(!compareMode);
+             }}
+             style={{ 
+               padding: "8px 16px", cursor: "pointer", 
+               background: compareMode ? "#00d2be" : "#444", 
+               color: "white", border: "none", borderRadius: 4,
+               fontWeight: "bold"
+             }}
+           >
+             {compareMode ? "Comparing Active" : "Compare Drivers"}
+           </button>
+           
+           {selectedDrivers.length === 2 && (
+             <button 
+               onClick={() => setSplitScreen(!splitScreen)}
+               style={{ 
+                 padding: "8px 16px", cursor: "pointer", 
+                 background: splitScreen ? "#ff2e2e" : "#444", 
+                 color: "white", border: "none", borderRadius: 4,
+                 fontWeight: "bold"
+               }}
+             >
+               {splitScreen ? "Exit Split Screen" : "Split Screen"}
+             </button>
+           )}
         </div>
       </div>
     </div>
