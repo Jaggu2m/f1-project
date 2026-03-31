@@ -237,13 +237,13 @@ export function useRaceState(
       // Derived lap
       const derivedLap = Math.max(1, Math.floor(scaledS / trackLen) + 1);
       
-      // GRID SYNTHESIS:
-      let displayS = scaledS;
+      // GRID SYNTHESIS (Meters logic for accurate sorting before Race)
+      let logicalS = interp.s;
       
       if (raceTime < 1.0) {
         const gridIndex = GRID_ORDER.indexOf(driver.driverCode);
         if (gridIndex !== -1) {
-           displayS = trackLen - (gridIndex * 16); // 16m spacing
+           logicalS = -gridIndex * 8; // Pure ordinal sorting
         }
       }
 
@@ -257,7 +257,7 @@ export function useRaceState(
         driverCode: driver.driverCode,
         teamColor: driver.teamColor,
         lap: derivedLap,
-        s: displayS, // Use modified S
+        s: logicalS, // Back to Pure Meters for Math Interpolation
         gap: 0, 
         interval: 0,
         inPit,

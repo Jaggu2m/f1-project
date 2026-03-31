@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 
 type Props = {
   drivers: any[];
@@ -9,14 +9,57 @@ type Props = {
 };
 
 export default function RaceLeaderboard({ drivers, totalLaps, selectedDriver, onDriverSelect }: Props) {
-  const prevOrderRef = useRef<string[]>([]);
+  const [committedOrder, setCommittedOrder] = useState<string[]>([]);
+  const [overtakeMap, setOvertakeMap] = useState<Record<string, number>>({});
+  
+  const pendingOrderRef = useRef<string[]>([]);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const currentLap = drivers[0]?.lap || 0;
 
-  // Track position change
+  // Initialization
   useEffect(() => {
-    prevOrderRef.current = drivers.map(d => d.driverCode);
+    if (committedOrder.length === 0 && drivers.length > 0) {
+      setCommittedOrder(drivers.map(d => d.driverCode));
+    }
   }, [drivers]);
+
+  // Sync / Debounce Order Changes
+  useEffect(() => {
+    if (drivers.length === 0) return;
+    
+    const trueOrder = drivers.map(d => d.driverCode);
+    const trueOrderStr = trueOrder.join(",");
+    const committedOrderStr = committedOrder.join(",");
+
+    if (trueOrderStr === committedOrderStr) {
+       // Perfect sync 
+       if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
+       if (Object.keys(overtakeMap).length > 0) setOvertakeMap({});
+       pendingOrderRef.current = [];
+    } else {
+       // Order is out of sync dynamically
+       const newMap: Record<string, number> = {};
+       trueOrder.forEach((code, trueIdx) => {
+           const commIdx = committedOrder.indexOf(code);
+           if (commIdx !== -1 && commIdx !== trueIdx) {
+               newMap[code] = commIdx > trueIdx ? 1 : -1;
+           }
+       });
+       setOvertakeMap(newMap);
+
+       // Schedule visual swap
+       if (pendingOrderRef.current.join(",") !== trueOrderStr) {
+           if (timeoutRef.current) clearTimeout(timeoutRef.current);
+           pendingOrderRef.current = trueOrder;
+           timeoutRef.current = setTimeout(() => {
+               setCommittedOrder(pendingOrderRef.current);
+               setOvertakeMap({});
+               timeoutRef.current = null;
+           }, 500); // 0.5 second broadcast delay!
+       }
+    }
+  }, [drivers, committedOrder]);
 
   const getTyreColor = (compound?: string) => {
     if (!compound) return "#444";
@@ -25,6 +68,15 @@ export default function RaceLeaderboard({ drivers, totalLaps, selectedDriver, on
     if (compound.includes("HARD")) return "#ffffff";
     return "#888";
   };
+
+  // Sort drivers based on frozen committedOrder so the layout doesn't violently snap instantly
+  const displayDrivers = [...drivers].sort((a, b) => {
+     const idxA = committedOrder.indexOf(a.driverCode);
+     const idxB = committedOrder.indexOf(b.driverCode);
+     if (idxA === -1) return 1;
+     if (idxB === -1) return -1;
+     return idxA - idxB;
+  });
 
   return (
     <div
@@ -61,14 +113,13 @@ export default function RaceLeaderboard({ drivers, totalLaps, selectedDriver, on
       </div>
 
       <AnimatePresence>
-        {drivers.map((d, i) => {
+        {displayDrivers.map((d, i) => {
           const isLeader = i === 0;
           const isBattle = d.interval > 0 && d.interval < 1;
           const isSelected = d.driverCode === selectedDriver;
 
-          const prevIndex = prevOrderRef.current.indexOf(d.driverCode);
-          const positionChange =
-            prevIndex !== -1 ? prevIndex - i : 0;
+          // Pull from the frozen 1000ms Overtake map
+          const positionChange = overtakeMap[d.driverCode] || 0;
 
           return (
             <motion.div
@@ -111,14 +162,14 @@ export default function RaceLeaderboard({ drivers, totalLaps, selectedDriver, on
                 </span>
 
                 {/* Position change */}
-                <span style={{ fontSize: 12 }}>
+                <span style={{ fontSize: 12, minWidth: 20, textAlign: "center" }}>
                   {positionChange > 0 && (
-                    <span style={{ color: "#00ff00" }}>
+                    <span style={{ color: "#00ff00", fontWeight: "bold" }}>
                       ▲{positionChange}
                     </span>
                   )}
                   {positionChange < 0 && (
-                    <span style={{ color: "#ff3c3c" }}>
+                    <span style={{ color: "#ff3c3c", fontWeight: "bold" }}>
                       ▼{Math.abs(positionChange)}
                     </span>
                   )}

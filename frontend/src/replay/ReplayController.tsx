@@ -31,6 +31,13 @@ export default function ReplayController({ season = 2023, round = 10, onBack }: 
              setTimeout(loadData, 5000);
              return;
           }
+          if (data.status === "failed") {
+             console.error("Race data ingestion failed. Telemetry is likely missing from F1 servers for this year/round.");
+             alert("FastF1 failed to find telemetry data for this generic race setup. This usually means the race hasn't happened yet, or it is too old for the F1 telemetry storage network (pre-2018).");
+             if (onBack) onBack();
+             return;
+          }
+          
           console.log("✅ Race Info Loaded:", data);
           if (!data.drivers || !data.track) {
             console.error("❌ Invalid Race Data Structure", data);

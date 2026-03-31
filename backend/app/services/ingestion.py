@@ -1,5 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, insert
 from app.core.database import AsyncSessionLocal
 from app.models import Race, Driver, Position, Telemetry, Lap, PitStop, TrackPoint
 import fastf1
@@ -106,6 +107,8 @@ async def ingest_race(season: int, round: int):
 
             # We need race start time
             race_start_time = session.laps["LapStartTime"].dropna().min()
+            
+            drivers_with_data = 0
     
             for driver_code, driver_id in driver_map.items():
                 print(f"Processing driver {driver_code}...")
@@ -121,77 +124,66 @@ async def ingest_race(season: int, round: int):
                     start_t = (lap["LapStartTime"] - race_start_time).total_seconds() if pd.notna(lap["LapStartTime"]) else 0.0
                     lap_time = lap["LapTime"].total_seconds() if pd.notna(lap["LapTime"]) else None
                     
-                    lap_objs.append(Lap(
-                        driver_id=driver_id,
-                        lap_number=int(lap["LapNumber"]),
-                        start_time=start_t,
-                        lap_time=lap_time,
-                        s1=lap["Sector1Time"].total_seconds() if pd.notna(lap["Sector1Time"]) else None,
-                        s2=lap["Sector2Time"].total_seconds() if pd.notna(lap["Sector2Time"]) else None,
-                        s3=lap["Sector3Time"].total_seconds() if pd.notna(lap["Sector3Time"]) else None,
-                    ))
+                    lap_objs.append({
+                        "driver_id": driver_id,
+                        "lap_number": int(lap["LapNumber"]),
+                        "start_time": start_t,
+                        "lap_time": lap_time,
+                        "s1": lap["Sector1Time"].total_seconds() if pd.notna(lap["Sector1Time"]) else None,
+                        "s2": lap["Sector2Time"].total_seconds() if pd.notna(lap["Sector2Time"]) else None,
+                        "s3": lap["Sector3Time"].total_seconds() if pd.notna(lap["Sector3Time"]) else None,
+                    })
                     
                     # Pitstops
                     if pd.notna(lap.get("PitInTime")):
                         enter = (lap["PitInTime"] - race_start_time).total_seconds()
                         exit_t = (lap["PitOutTime"] - race_start_time).total_seconds() if pd.notna(lap.get("PitOutTime")) else None
-                        pit_objs.append(PitStop(
-                            driver_id=driver_id,
-                            lap=int(lap["LapNumber"]),
-                            enter_time=enter,
-                            exit_time=exit_t
-                        ))
+                        pit_objs.append({
+                            "driver_id": driver_id,
+                            "lap": int(lap["LapNumber"]),
+                            "enter_time": enter,
+                            "exit_time": exit_t
+                        })
                 
-                db.add_all(lap_objs)
-                db.add_all(pit_objs)
+                if lap_objs:
+                    await db.execute(insert(Lap).values(lap_objs))
+                if pit_objs:
+                    await db.execute(insert(PitStop).values(pit_objs))
                 await db.commit()
     
                 # Telemetry & Positions
                 # Load telemetry for all laps
                 try:
-                    tel = laps.get_telemetry()
-                    # Run heavy processing in executor
+                    # Run heavy FastF1 telemetry unpacking in executor to avoid freezing Uvicorn
+                    tel = await loop.run_in_executor(None, laps.get_telemetry)
+                    # Run heavy Pandas sorting in executor
                     pos_data, tel_data = await loop.run_in_executor(None, _process_telemetry_batch, tel, race_start_time)
                     
-                    # Bulk insert Telemetry
-                    # Chunking to avoid memory issues
-                    CHUNK_SIZE = 1000
-                    for i in range(0, len(tel_data), CHUNK_SIZE):
-                        chunk = tel_data[i:i+CHUNK_SIZE]
-                        db_objs = [
-                            Telemetry(
-                                driver_id=driver_id,
-                                t=row["t"],
-                                speed=row["speed"],
-                                throttle=row["throttle"],
-                                brake=row["brake"],
-                                gear=row["gear"],
-                                rpm=row["rpm"],
-                                drs=row["drs"]
-                            ) for row in chunk
-                        ]
-                        db.add_all(db_objs)
-                        await db.commit()
-    
-                    # Bulk insert Positions
-                    for i in range(0, len(pos_data), CHUNK_SIZE):
-                        chunk = pos_data[i:i+CHUNK_SIZE]
-                        db_objs = [
-                            Position(
-                                driver_id=driver_id,
-                                t=row["t"],
-                                s=row["s"],
-                                lap=0 # Todo: determine lap from t
-                            ) for row in chunk
-                        ]
-                        db.add_all(db_objs)
-                        await db.commit()
+                    # Core insert Telemetry continuously - using native executemany bindings!
+                    for r in tel_data: r["driver_id"] = driver_id
+                    if tel_data:
+                        await db.execute(insert(Telemetry), tel_data)
+
+                    # Core insert Positions continuously
+                    for r in pos_data: 
+                        r["driver_id"] = driver_id
+                        r["lap"] = 0
+                    if pos_data:
+                        await db.execute(insert(Position), pos_data)
+                    
+                    # Single network execution
+                    await db.commit()
+                    drivers_with_data += 1
     
                 except Exception as e:
                     print(f"Error processing telemetry for {driver_code}: {e}")
             
             # Done
-            race.status = "ready"
+            if drivers_with_data == 0:
+                print("No drivers had valid telemetry data. Marking race as failed.")
+                race.status = "failed"
+            else:
+                race.status = "ready"
             await db.commit()
 
         except Exception as e:
@@ -261,24 +253,26 @@ def _process_telemetry_batch(tel, start_time):
     tel["TimeSeconds"] = (tel["SessionTime"] - start_time).dt.total_seconds()
     tel = tel.dropna(subset=["TimeSeconds", "Speed", "X", "Y", "Distance"])
     
-    # Telemetry rows
-    tel_rows = []
-    pos_rows = []
+    # Extract columns as lightning-fast native Python lists
+    t_vals = tel["TimeSeconds"].tolist()
+    speed_vals = tel["Speed"].tolist()
+    throttle_vals = tel["Throttle"].tolist()
+    brake_vals = tel["Brake"].tolist()
+    gear_vals = tel["nGear"].tolist()
+    rpm_vals = tel["RPM"].tolist()
+    drs_vals = tel["DRS"].tolist()
+    s_vals = tel["Distance"].tolist()
     
-    for _, row in tel.iterrows():
-        t = row["TimeSeconds"]
-        tel_rows.append({
-            "t": t,
-            "speed": row["Speed"],
-            "throttle": row["Throttle"],
-            "brake": row["Brake"],
-            "gear": row["nGear"],
-            "rpm": row["RPM"],
-            "drs": row["DRS"]
-        })
-        pos_rows.append({
-            "t": t,
-            "s": row["Distance"]
-        })
+    # Telemetry rows
+    tel_rows = [
+        {"t": t, "speed": s, "throttle": th, "brake": b, "gear": g, "rpm": r, "drs": d}
+        for t, s, th, b, g, r, d in zip(t_vals, speed_vals, throttle_vals, brake_vals, gear_vals, rpm_vals, drs_vals)
+    ]
+    
+    # Position rows
+    pos_rows = [
+        {"t": t, "s": s_dist}
+        for t, s_dist in zip(t_vals, s_vals)
+    ]
     
     return pos_rows, tel_rows
