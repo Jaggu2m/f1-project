@@ -73,8 +73,8 @@ function buildTrack(points: RawTrackPoint[]): TrackPoint[] {
 
 
 function positionFromS(s: number, track: TrackPoint[]) {
-  const len = track[track.length - 1].s;
-  const wrapped = ((s % len) + len) % len;
+  const coordLen = track[track.length - 1].s;
+  const wrapped = ((s % coordLen) + coordLen) % coordLen;
 
   for (let i = 1; i < track.length; i++) {
     if (track[i].s >= wrapped) {
@@ -283,7 +283,7 @@ export default function RaceRenderer({ raceTime, raceData, selectedDriver, onDri
       const interp = interpolateLapS(driver.positions, raceTime);
       if (!interp) return;
 
-      const raceS = interp.s;
+      const raceS = interp.s * 10; // Must apply 10X natively for visual snapping
       const basePos = positionFromS(raceS, track);
       const r = rotate(basePos.x, basePos.y);
 
@@ -294,7 +294,7 @@ export default function RaceRenderer({ raceTime, raceData, selectedDriver, onDri
       const activePit = driver.pitStops?.find(p => raceTime >= p.enter && raceTime <= p.exit);
       if(activePit) { 
          // Simplified pit offset just to separate visually
-         const aheadPos = positionFromS(raceS + 10, track);
+         const aheadPos = positionFromS(raceS + 100, track); // 100 decimeters = 10 meters 
          const rAhead = rotate(aheadPos.x, aheadPos.y);
          const ax = (rAhead.x - minX) * scale + PADDING;
          const ay = (rAhead.y - minY) * scale + PADDING;
@@ -339,7 +339,7 @@ export default function RaceRenderer({ raceTime, raceData, selectedDriver, onDri
       }
 
       // Label
-      if (currentCam.current.zoom > 1.5 || isSelected) {
+      if (!selectedDriver || currentCam.current.zoom > 1.5 || isSelected) {
           ctxCar.fillStyle = "#fff";
           ctxCar.font = "11px sans-serif";
           ctxCar.fillText(driver.driverCode, cx + 10, cy + 4);

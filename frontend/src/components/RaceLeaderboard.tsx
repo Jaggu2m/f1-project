@@ -4,9 +4,11 @@ import { useRef, useEffect } from "react";
 type Props = {
   drivers: any[];
   totalLaps: number;
+  selectedDriver?: string | null;
+  onDriverSelect?: (driverCode: string) => void;
 };
 
-export default function RaceLeaderboard({ drivers, totalLaps }: Props) {
+export default function RaceLeaderboard({ drivers, totalLaps, selectedDriver, onDriverSelect }: Props) {
   const prevOrderRef = useRef<string[]>([]);
 
   const currentLap = drivers[0]?.lap || 0;
@@ -62,6 +64,7 @@ export default function RaceLeaderboard({ drivers, totalLaps }: Props) {
         {drivers.map((d, i) => {
           const isLeader = i === 0;
           const isBattle = d.interval > 0 && d.interval < 1;
+          const isSelected = d.driverCode === selectedDriver;
 
           const prevIndex = prevOrderRef.current.indexOf(d.driverCode);
           const positionChange =
@@ -75,18 +78,23 @@ export default function RaceLeaderboard({ drivers, totalLaps }: Props) {
               animate={{ opacity: d.inPit ? 0.5 : 1, x: 0 }}
               exit={{ opacity: 0, x: -20 }}
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
+              onClick={() => onDriverSelect && onDriverSelect(d.driverCode)}
               style={{
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
-                background: isBattle
+                background: isSelected 
+                  ? "#005f56" 
+                  : isBattle
                   ? "rgba(255,255,0,0.08)"
                   : isLeader
                   ? "#1a1a1a"
                   : "rgba(0,0,0,0.6)",
                 padding: isLeader ? "14px 18px" : "8px 12px",
                 borderRadius: 6,
-                borderLeft: `6px solid ${d.teamColor}`
+                borderLeft: `6px solid ${isSelected ? "#00d2be" : d.teamColor}`,
+                cursor: "pointer",
+                border: isSelected ? "1px solid #00d2be" : "1px solid transparent"
               }}
             >
               {/* LEFT SIDE */}

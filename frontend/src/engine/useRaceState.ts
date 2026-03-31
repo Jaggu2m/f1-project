@@ -231,11 +231,14 @@ export function useRaceState(
         (pit) => raceTime >= pit.enter && raceTime <= pit.exit
       ) ?? false;
 
+      // Convert physical cumulative meters into graphical Cartesian decimeters
+      const scaledS = interp.s * 10;
+
       // Derived lap
-      const derivedLap = Math.max(1, Math.floor(interp.s / trackLen) + 1);
+      const derivedLap = Math.max(1, Math.floor(scaledS / trackLen) + 1);
       
       // GRID SYNTHESIS:
-      let displayS = interp.s;
+      let displayS = scaledS;
       
       if (raceTime < 1.0) {
         const gridIndex = GRID_ORDER.indexOf(driver.driverCode);
